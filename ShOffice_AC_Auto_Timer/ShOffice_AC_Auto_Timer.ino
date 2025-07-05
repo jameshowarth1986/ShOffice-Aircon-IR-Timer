@@ -23,11 +23,13 @@ const char* PARAM_INPUT_1 = "input1";
 const char* PARAM_INPUT_2 = "input2";
 const char* PARAM_INPUT_3 = "input3";
 const char* PARAM_INPUT_4 = "input4";
+const char* PARAM_INPUT_5 = "input5";
 
 String myParameter1 = "new";
 String myParameter2 = "new";
 String myParameter3 = "new";
 String myParameter4 = "new";
+String myParameter5 = "new";
 
 char displayStartTimeHour [2]= {'h','h'};
 char displayStartTimeMinute [2] = {'m','m'};
@@ -99,6 +101,10 @@ const char index_html[] PROGMEM = R"rawliteral(
     AC Mode (h/c): <input type="text" name="input4">
     <input type="submit" value="Submit">
   </form>
+  <form action="/get">
+    System Run (1/0): <input type="text" name="input5">
+    <input type="submit" value="Submit">
+  </form>
 </body></html>)rawliteral";
 
 void notFound(AsyncWebServerRequest* request) {
@@ -106,7 +112,7 @@ void notFound(AsyncWebServerRequest* request) {
 }
 
 
-const char* ssid     = "ShOffice_2_4_GHz";
+const char* ssid     = "ShOffice_2_4GHz";
 const char* password = "workworkwork";
 
 //const char* ssid = "VM2681428";
@@ -240,6 +246,11 @@ void setup(){
       inputParam = PARAM_INPUT_4;
       myParameter4 = inputMessage;
     }
+    else if (request->hasParam(PARAM_INPUT_5)) {
+      inputMessage = request->getParam(PARAM_INPUT_5)->value();
+      inputParam = PARAM_INPUT_5;
+      myParameter5 = inputMessage;
+    }
     else {
       inputMessage = "No message sent";
       inputParam = "none";
@@ -304,12 +315,21 @@ void loop(){
     //we have an error, do nothing
     AC_Mode_State = "Error";
   }
+
+  if(myParameter5.toInt() == 1){
+    runSystem = HIGH;
+  }
+
+  if(myParameter5.toInt() == 0){
+    runSystem = LOW;
+  }
   
 
 
 
 
   //printLocalTime();
+  /*
   //if green button is pressed set runSystem to TRUE
   if(digitalRead(GreenGoPin) == HIGH)  {
     runSystem = HIGH;     
@@ -318,7 +338,7 @@ void loop(){
   if(digitalRead(RedStopPin) == HIGH)  {
     runSystem = LOW;  
   }
-  
+  */
   if(AC_State_Previous == 1){
     PreviousState = "RUNNING";
   }
