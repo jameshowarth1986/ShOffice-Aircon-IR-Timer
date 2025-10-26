@@ -120,7 +120,7 @@ const char* password = "workworkwork";
 
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
-const int   daylightOffset_sec = 3600; //For use in British summer time (BST)
+const int   daylightOffset_sec = 0; //For use in British summer time set to 3600, for winter set to 0(BST)
 //#define runPin 23 //make sure there is a pull down resistor on the button, because it is a normally open type and if left floating the microcontroller gets confused. 
 #define GreenGoPin 5 // for green button
 #define RedStopPin 6
