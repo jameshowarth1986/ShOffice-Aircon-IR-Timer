@@ -193,32 +193,77 @@ bool TimeSyncSuccessBool = false;
 void setup(){
   Serial.begin(115200);
 
-  // Connect to Wi-Fi
+  // 1. REGISTER THE EVENT HANDLER
+  WiFi.onEvent(WiFiEvent); // This tells the ESP32 to run WiFiEvent() on network changes
+
+  // 2. INITIAL CONNECTION
   WiFi.mode(WIFI_STA);
   Serial.print("Connecting to ");
   Serial.println(ssid);
+  // This starts the connection process, but does NOT wait.
+  // The ARDUINO_EVENT_WIFI_STA_GOT_IP event will handle the rest.
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected.");
-  Serial.println();
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-  
-  
-  // Init and get the time
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  printLocalTime();
 
-  // Send web page with input fields to client
+  // 3. Keep configTime and server.begin() *after* WiFi.begin() but you don't need to wait for the IP here.
+  // We recommend moving configTime and printLocalTime into the GOT_IP event handler for best practice.
+
+  // 3. ASYNC WEB SERVER SETUP (Define ALL routes and start ONCE)
+  
+  // Route for the homepage ("/") 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send_P(200, "text/html", index_html);
   });
 
+  // Route for the form submission ("/get")
+  server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
+    String inputMessage;
+    String inputParam;
+    // GET input1 value on <ESP_IP>/get?input1=<inputMessage> 
+    if (request->hasParam(PARAM_INPUT_1)) {
+      inputMessage = request->getParam(PARAM_INPUT_1)->value();
+      inputParam = PARAM_INPUT_1; 
+      myParameter1 = inputMessage;
+    }
+    // GET input2 value on <ESP_IP>/get?input2=<inputMessage>
+    else if (request->hasParam(PARAM_INPUT_2)) {
+      inputMessage = request->getParam(PARAM_INPUT_2)->value();
+      inputParam = PARAM_INPUT_2; 
+      myParameter2 = inputMessage;
+    }
+    // GET input3 value on <ESP_IP>/get?input3=<inputMessage> 
+    else if (request->hasParam(PARAM_INPUT_3)) {
+      inputMessage = request->getParam(PARAM_INPUT_3)->value();
+      inputParam = PARAM_INPUT_3; 
+      myParameter3 = inputMessage;
+    } 
+    // GET input4 value on <ESP_IP>/get?input4=<inputMessage>
+    else if (request->hasParam(PARAM_INPUT_4)) {
+      inputMessage = request->getParam(PARAM_INPUT_4)->value();
+      inputParam = PARAM_INPUT_4;
+      myParameter4 = inputMessage;
+    }
+    else if (request->hasParam(PARAM_INPUT_5)) {
+      inputMessage = request->getParam(PARAM_INPUT_5)->value();
+      inputParam = PARAM_INPUT_5; 
+      myParameter5 = inputMessage;
+    }
+    else {
+      inputMessage = "No message sent";
+      inputParam = "none"; 
+    }
+    Serial.println(inputMessage); 
+    //request->send(200, "text/html", "HTTP GET request sent to your ESP on input field (" + inputParam + ") with value: " + inputMessage + "<br><a href=\"/\">Return to Home Page</a>"); 
+    request->send(200, "text/html", "Configuration updated successfully.<br><a href=\"/\">Return to Home Page</a>");
+  });
+  
+  // Set the fallback for unhandled routes
+  server.onNotFound(notFound);
+  
+  // Start the server ONLY ONCE
+  server.begin(); 
+
   // Send a GET request to <ESP_IP>/get?input1=<inputMessage>
+  /*
   server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
     String inputMessage;
     String inputParam;
@@ -260,7 +305,7 @@ void setup(){
   });
   server.onNotFound(notFound);
   server.begin();
-  
+  */
 
   #if defined(__AVR_ATmega32U4__) || defined(SERIAL_PORT_USBVIRTUAL) || defined(SERIAL_USB) /*stm32duino*/|| defined(USBCON) /*STM32_stm32*/ \
     || defined(SERIALUSB_PID)  || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_attiny3217)
@@ -291,6 +336,15 @@ void setup(){
 
 void loop(){
 
+  // --- Add Periodic Time Synchronization Check ---
+    if (WiFi.status() == WL_CONNECTED && (millis() - TimeIntervalPrevious >= TimeSyncInterval)) {
+      // Re-run configuration and sync the time
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      printLocalTime(); // This is where the actual time sync is requested
+
+      TimeIntervalPrevious = millis();
+    }
+
   if(myParameter1.toInt() != 0){
     //If the value is non-zero then it means i have entered a new value
     AC_Turn_On_Time_Hour = myParameter1.toInt();
@@ -301,12 +355,12 @@ void loop(){
     TargetTemperature = myParameter3.toInt();
   }
 
-  if(myParameter4 == "h"){
+  if(myParameter4.equalsIgnoreCase("h")){
     //we have set it to heat mode
     myModeParameter = AC_MODE_HEATING - '0'; // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
     AC_Mode_State = "Heat";
   }
-  else if(myParameter4 == "c"){
+  else if(myParameter4.equalsIgnoreCase("c")){
     //we have set it to cool mode
     myModeParameter = AC_MODE_COOLING - '0'; // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
     AC_Mode_State = "Cool";
@@ -362,7 +416,7 @@ void loop(){
   */
   if(millis() - OLEDUpdateIntervalPrevious >= OLEDUpdateInterval){
 
-    getLocalTime(&timenow, 5000);
+    getLocalTime(&timenow, 0);
     strftime(DisplayTimeWeekDay,10, "%A", &timenow);
     strftime(DisplayTimeHour,3, "%H", &timenow);
     strftime(DisplayTimeMinute,3, "%M", &timenow);
@@ -508,8 +562,38 @@ void printLocalTime(){
   }
   else{
     TimeSyncSuccessBool = true;
+  }  
+}
+
+void WiFiEvent(WiFiEvent_t event) {
+  //courtesy of Google Gemini
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_READY:
+      Serial.println("WiFi ready");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_START:
+      Serial.println("WiFi station started");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.println("Connected to WiFi network");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      Serial.println("WiFi lost connection, attempting to reconnect...");
+      // *** THE NON-BLOCKING RECONNECTION STEP ***
+      // Call WiFi.begin() to reconnect. The ESP32 handles the retries.
+      WiFi.begin(ssid, password);
+      TimeSyncSuccessBool = false; // Indicate time may be stale
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
+      // Re-initialize and get the time after a successful connection/reconnection
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      printLocalTime();
+      // Restart the server if it was stopped (optional, depends on AsyncWebServer library behavior)
+      // server.begin();
+      break;
+    default:
+      break;
   }
-  
-  
-  
 }
