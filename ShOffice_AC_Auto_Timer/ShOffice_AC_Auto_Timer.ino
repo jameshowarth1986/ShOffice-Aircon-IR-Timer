@@ -131,6 +131,10 @@ String RunSystemStr = "INITIALISED";
 String CurrentState = "INITIALISED";
 String PreviousState = "INITIALISED";
 
+unsigned long previousIRMillis = 0;
+const long IRInterval = 2000; // 2 seconds delay between IR commands
+int IRCommandStep = 0; // 0=Idle, 1=Send ON, 2=Send MODE, 3=Send TEMP
+
 int myCommand = 0;
 int myParameter = 0;
 int myModeParameter = 0;
@@ -262,51 +266,6 @@ void setup(){
   // Start the server ONLY ONCE
   server.begin(); 
 
-  // Send a GET request to <ESP_IP>/get?input1=<inputMessage>
-  /*
-  server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
-    String inputMessage;
-    String inputParam;
-    // GET input1 value on <ESP_IP>/get?input1=<inputMessage>
-    if (request->hasParam(PARAM_INPUT_1)) {
-      inputMessage = request->getParam(PARAM_INPUT_1)->value();
-      inputParam = PARAM_INPUT_1;
-      myParameter1 = inputMessage;
-    }
-    // GET input2 value on <ESP_IP>/get?input2=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_2)) {
-      inputMessage = request->getParam(PARAM_INPUT_2)->value();
-      inputParam = PARAM_INPUT_2;
-      myParameter2 = inputMessage;
-    }
-    // GET input3 value on <ESP_IP>/get?input3=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_3)) {
-      inputMessage = request->getParam(PARAM_INPUT_3)->value();
-      inputParam = PARAM_INPUT_3;
-      myParameter3 = inputMessage;
-    } 
-    // GET input4 value on <ESP_IP>/get?input4=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_4)) {
-      inputMessage = request->getParam(PARAM_INPUT_4)->value();
-      inputParam = PARAM_INPUT_4;
-      myParameter4 = inputMessage;
-    }
-    else if (request->hasParam(PARAM_INPUT_5)) {
-      inputMessage = request->getParam(PARAM_INPUT_5)->value();
-      inputParam = PARAM_INPUT_5;
-      myParameter5 = inputMessage;
-    }
-    else {
-      inputMessage = "No message sent";
-      inputParam = "none";
-    }
-    Serial.println(inputMessage);
-    request->send(200, "text/html", "HTTP GET request sent to your ESP on input field (" + inputParam + ") with value: " + inputMessage + "<br><a href=\"/\">Return to Home Page</a>");
-  });
-  server.onNotFound(notFound);
-  server.begin();
-  */
-
   #if defined(__AVR_ATmega32U4__) || defined(SERIAL_PORT_USBVIRTUAL) || defined(SERIAL_USB) /*stm32duino*/|| defined(USBCON) /*STM32_stm32*/ \
     || defined(SERIALUSB_PID)  || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_attiny3217)
   delay(4000); // To be able to connect Serial monitor after reset or power up and before first print out. Do not wait for an attached Serial Monitor!
@@ -345,6 +304,16 @@ void loop(){
       TimeIntervalPrevious = millis();
     }
 
+    
+    if (WiFi.status() == WL_CONNECTED && !TimeSyncSuccessBool) {
+      // Re-run configuration and sync the time
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      printLocalTime(); // This is where the actual time sync is requested
+
+      TimeIntervalPrevious = millis();
+    }
+
+
   if(myParameter1.toInt() != 0){
     //If the value is non-zero then it means i have entered a new value
     AC_Turn_On_Time_Hour = myParameter1.toInt();
@@ -378,21 +347,6 @@ void loop(){
     runSystem = LOW;
   }
   
-
-
-
-
-  //printLocalTime();
-  /*
-  //if green button is pressed set runSystem to TRUE
-  if(digitalRead(GreenGoPin) == HIGH)  {
-    runSystem = HIGH;     
-  }
-  //if red button is pressed set runSystem to FALSE
-  if(digitalRead(RedStopPin) == HIGH)  {
-    runSystem = LOW;  
-  }
-  */
   if(AC_State_Previous == 1){
     PreviousState = "RUNNING";
   }
@@ -406,14 +360,7 @@ void loop(){
   if(runSystem == LOW){
     RunSystemStr = "OFF";
   }
-  /*
-  if(millis() - TemperatureUpdateIntervalPrevious >= TemperatureUpdateInterval){
-    TemperatureNow = round(am2320.readTemperature());
-    delay(200);
-    HumidityNow = round(am2320.readHumidity());
-    TemperatureUpdateIntervalPrevious = millis();
-  }
-  */
+
   if(millis() - OLEDUpdateIntervalPrevious >= OLEDUpdateInterval){
 
     getLocalTime(&timenow, 0);
@@ -463,24 +410,9 @@ void loop(){
     u8g2.setFont(u8g2_font_profont22_tf);	// choose a bigger font for time
     u8g2.drawStr(37,30, DisplayTimeHour);
     u8g2.drawStr(59,30, ":");
-    u8g2.drawStr(68,30, DisplayTimeMinute);
-    //u8g2.setCursor(48,53);
-    //u8g2.print("\xC2B0"); // print the degree symbol for temperature
-    //u8g2.setCursor(118,75);
-    //u8g2.print("\x0025");
-    //u8g2.print("%");
-    //u8g2.drawGlyph(118, 53, 0x0025);
-
-    //u8g2.setFont(u8g2_font_fur30_tf); //choose a bigg font for the temperature reading	
-    //u8g2.setCursor(1, 75);
-    //u8g2.print(TemperatureNow);
-    //u8g2.drawLine(63, 40, 63, 80);
-    //u8g2.setCursor(70, 75);
-    //u8g2.print(HumidityNow);   
+    u8g2.drawStr(68,30, DisplayTimeMinute); 
     u8g2.sendBuffer();
     OLEDUpdateIntervalPrevious = millis();
-  
-  
   }
   
     
@@ -490,50 +422,21 @@ void loop(){
    * TURN ON THE SYSTEM, WITH HIGH FAN SPEED TO WARM UP THE ROOM QUICKLY
    * ========================================================================
    */
+    // Find the AC Turn-On logic around source 85
     if(runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Turn_On_Time_Hour && timenow.tm_min == AC_Turn_On_Time_Minute){
-      // send command to turn AC ON
-      //myModeParameter = AC_MODE_HEATING - '0'; // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
-      myFanSpeedParameter = 4 - '0';
-      MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_ON, 0);
-      delay(2000);
-      MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_MODE, myModeParameter); // set the AC to heat mode
-      delay(2000);
-      MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_TEMPERATURE, TargetTemperature); // set the AC to heat mode
-      delay(2000);
-      //MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_FAN_SPEED, myFanSpeedParameter); // set the Fan speed to high
-      //delay(2000);
-
-      //LG_COMMAND_TEMPERATURE
-
-      AC_State_Previous = 1; // this helps to stop us spamming commands for an entire minute during switch on
-      SystemState = "HIGH";
+        // Instead of sending commands immediately, start the sequence
+        if (IRCommandStep == 0) { // Only start if we are idle
+            IRCommandStep = 1; 
+            previousIRMillis = millis(); // Initialize the timer
+            AC_State_Previous = 1; // Block re-triggering for this minute
+        }
+        SystemState = "HIGH";
     }
     //After a period of time we need ot clear AC_State_Previous so it can run again the next day. Propose to link this to a time.
     if(AC_State_Previous == 1 && timenow.tm_hour == AC_Turn_On_Time_Hour && timenow.tm_min == (AC_Turn_On_Time_Minute+1)){
       //After a delay, we reset AC_State_Previous
       AC_State_Previous = 0; //reset previous state to zero.
     }
-
-  /*
-   * ========================================================================
-   * SET THE SYSTEM TO MELLOW (LOW FAN SPEED)
-   * ========================================================================
-   */
-    /*
-    if(runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Mellow_Time_Hour && timenow.tm_min == AC_Turn_Mellow_Minute){
-      myFanSpeedParameter = 2 - '0';
-      MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_FAN_SPEED, myFanSpeedParameter); // set the Fan speed to low
-      delay(2000);
-
-      AC_State_Previous = 1; // this helps to stop us spamming commands for an entire minute during switch on
-      SystemState ="MELLOW";
-    }
-    //After a period of time we need ot clear AC_State_Previous so it can run again the next day. Propose to link this to a time.
-    if(AC_State_Previous == 1 && timenow.tm_hour == AC_Mellow_Time_Hour && timenow.tm_min == (AC_Turn_Mellow_Minute+1)){
-      //After a 5 minute delay, we reset AC_State_Previous
-      AC_State_Previous = 0; //reset previous state to zero.
-    }
-    */
 
   /*
    * ========================================================================
@@ -550,6 +453,41 @@ void loop(){
     if(AC_State_Previous == 1 && timenow.tm_hour == AC_Turn_Off_Time_Hour && timenow.tm_min == (AC_Turn_Off_Time_Minute+1)){
       AC_State_Previous = 0; //reset previous state to zero.
     }
+
+    // --- Non-Blocking IR Transmission Sequence ---
+    if (IRCommandStep > 0 && (millis() - previousIRMillis >= IRInterval)) {
+        
+        // Check which command to send
+        switch (IRCommandStep) {
+            case 1:
+                Serial.println("IR Step 1: Sending ON");
+                MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_ON, 0); 
+                IRCommandStep = 2; // Move to the next step
+                break;
+                
+            case 2:
+                Serial.println("IR Step 2: Sending MODE");
+                MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_MODE, myModeParameter); // set the AC mode
+                IRCommandStep = 3; // Move to the next step
+                break;
+                
+            case 3:
+                Serial.println("IR Step 3: Sending TEMPERATURE");
+                MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_TEMPERATURE, TargetTemperature); // set the AC temperature
+                IRCommandStep = 4; // Move to the final step
+                break;
+                
+            case 4:
+                Serial.println("IR Sequence Complete.");
+                // All commands sent. Reset the sequence.
+                IRCommandStep = 0; 
+                break;
+        }
+        
+        previousIRMillis = millis(); // Reset the timer for the next step
+    }
+    // --- End Non-Blocking IR Transmission Sequence ---
+
 }
     
 
