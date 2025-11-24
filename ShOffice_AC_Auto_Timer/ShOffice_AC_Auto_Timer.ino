@@ -130,6 +130,7 @@ String AC_Mode_State = "null";
 String RunSystemStr = "INITIALISED";
 String CurrentState = "INITIALISED";
 String PreviousState = "INITIALISED";
+String Wifi_State = "unknown";
 
 unsigned long previousIRMillis = 0;
 const long IRInterval = 2000; // 2 seconds delay between IR commands
@@ -375,12 +376,9 @@ void loop(){
     u8g2.setFont(u8g2_font_smart_patrol_nbp_tf);	// choose a small font
     //draw element: x_pos, y_pos, variable
     u8g2.drawStr(20,10, DisplayTimeWeekDay);//write out the day of the week
-    if(TimeSyncSuccessBool == true){
-      u8g2.drawStr(0,110,"Time Sync OK");
-    }
-    else{
-      u8g2.drawStr(0,110,"Time Sync FAIL");
-    }
+    //Wifi_State and IP Address
+    u8g2.setCursor(0, 110);
+    u8g2.print(Wifi_State);
     u8g2.setCursor(0, 125);
     u8g2.print(WiFi.localIP());
 
@@ -508,12 +506,15 @@ void WiFiEvent(WiFiEvent_t event) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_READY:
       Serial.println("WiFi ready");
+      Wifi_State = "ready";
       break;
     case ARDUINO_EVENT_WIFI_STA_START:
       Serial.println("WiFi station started");
+      Wifi_State = "started";
       break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
       Serial.println("Connected to WiFi network");
+      Wifi_State = "connected";
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       Serial.println("WiFi lost connection, attempting to reconnect...");
@@ -521,6 +522,7 @@ void WiFiEvent(WiFiEvent_t event) {
       // Call WiFi.begin() to reconnect. The ESP32 handles the retries.
       WiFi.begin(ssid, password);
       TimeSyncSuccessBool = false; // Indicate time may be stale
+      Wifi_State = "disconnected";
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       Serial.print("IP Address: ");
@@ -528,6 +530,7 @@ void WiFiEvent(WiFiEvent_t event) {
       // Re-initialize and get the time after a successful connection/reconnection
       configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
       printLocalTime();
+      Wifi_State = "GOT IP";
       // Restart the server if it was stopped (optional, depends on AsyncWebServer library behavior)
       // server.begin();
       break;
