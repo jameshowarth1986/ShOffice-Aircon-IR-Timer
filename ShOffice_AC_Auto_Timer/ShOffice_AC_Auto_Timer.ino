@@ -8,6 +8,7 @@
   The above copyright notice and this permission notice shall be included in all
   copies or substantial portions of the Software.
 */
+//replacing strings with char arrays to improve stability
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -19,17 +20,34 @@
 
 AsyncWebServer server(80);
 
+//set up some of our AC default conditions
+int myCommand = 0;
+int myParameter = 0;
+int myModeParameter = 0;
+int myTemperatureParameter = 0;
+int myFanSpeedParameter = 0;
+int TargetTemperature = 21;
+
+//set up time variables for turning system on and off
+int AC_Turn_On_Time_Hour = 05;
+int AC_Turn_On_Time_Minute = 00;
+
+const int AC_Mellow_Time_Hour = 07;
+const int AC_Turn_Mellow_Minute = 00;
+
 const char* PARAM_INPUT_1 = "input1";
 const char* PARAM_INPUT_2 = "input2";
 const char* PARAM_INPUT_3 = "input3";
 const char* PARAM_INPUT_4 = "input4";
 const char* PARAM_INPUT_5 = "input5";
 
-String myParameter1 = "new";
-String myParameter2 = "new";
-String myParameter3 = "new";
-String myParameter4 = "new";
-String myParameter5 = "new";
+// Use fixed-size char arrays instead of String for better memory stability
+// We assume inputs are short (e.g., up to 10 characters)
+char myParameter1[4] = "xx"; // Default Hour
+char myParameter2[4] = "xx"; // Default Minute
+char myParameter3[4] = "xx"; // Default Temperature
+char myParameter4[4] = "xx";  // Default Mode (h/c)
+char myParameter5[4] = "xx";  // Default System Run (1/0)
 
 char displayStartTimeHour [2]= {'h','h'};
 char displayStartTimeMinute [2] = {'m','m'};
@@ -136,19 +154,9 @@ unsigned long previousIRMillis = 0;
 const long IRInterval = 2000; // 2 seconds delay between IR commands
 int IRCommandStep = 0; // 0=Idle, 1=Send ON, 2=Send MODE, 3=Send TEMP
 
-int myCommand = 0;
-int myParameter = 0;
-int myModeParameter = 0;
-int myTemperatureParameter = 0;
-int myFanSpeedParameter = 0;
-int TargetTemperature = 21;
 
-//set up time variables for turning system on and off
-int AC_Turn_On_Time_Hour = 05;
-int AC_Turn_On_Time_Minute = 00;
 
-const int AC_Mellow_Time_Hour = 07;
-const int AC_Turn_Mellow_Minute = 00;
+
 
 const int AC_Turn_Off_Time_Hour = 21;
 const int AC_Turn_Off_Time_Minute = 00;
@@ -221,42 +229,53 @@ void setup(){
 
   // Route for the form submission ("/get")
   server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
-    String inputMessage;
-    String inputParam;
+    // Change char array to const char*
+    const char* inputMessage; 
+    const char* inputParam;
+
     // GET input1 value on <ESP_IP>/get?input1=<inputMessage> 
     if (request->hasParam(PARAM_INPUT_1)) {
-      inputMessage = request->getParam(PARAM_INPUT_1)->value();
+      // Use c_str() to get a const char* from the String object
+      inputMessage = request->getParam(PARAM_INPUT_1)->value().c_str(); 
       inputParam = PARAM_INPUT_1; 
-      myParameter1 = inputMessage;
+      // Safely copy the C-string into the char array
+      // sizeof(myParameter1) is 4
+      strncpy(myParameter1, inputMessage, sizeof(myParameter1) - 1); 
+      myParameter1[sizeof(myParameter1) - 1] = '\0'; // Null-terminate
     }
     // GET input2 value on <ESP_IP>/get?input2=<inputMessage>
     else if (request->hasParam(PARAM_INPUT_2)) {
-      inputMessage = request->getParam(PARAM_INPUT_2)->value();
+      inputMessage = request->getParam(PARAM_INPUT_2)->value().c_str(); 
       inputParam = PARAM_INPUT_2; 
-      myParameter2 = inputMessage;
+      strncpy(myParameter2, inputMessage, sizeof(myParameter2) - 1); 
+      myParameter2[sizeof(myParameter2) - 1] = '\0';
     }
     // GET input3 value on <ESP_IP>/get?input3=<inputMessage> 
     else if (request->hasParam(PARAM_INPUT_3)) {
-      inputMessage = request->getParam(PARAM_INPUT_3)->value();
+      inputMessage = request->getParam(PARAM_INPUT_3)->value().c_str(); 
       inputParam = PARAM_INPUT_3; 
-      myParameter3 = inputMessage;
+      strncpy(myParameter3, inputMessage, sizeof(myParameter3) - 1); 
+      myParameter3[sizeof(myParameter3) - 1] = '\0';
     } 
     // GET input4 value on <ESP_IP>/get?input4=<inputMessage>
     else if (request->hasParam(PARAM_INPUT_4)) {
-      inputMessage = request->getParam(PARAM_INPUT_4)->value();
+      inputMessage = request->getParam(PARAM_INPUT_4)->value().c_str(); 
       inputParam = PARAM_INPUT_4;
-      myParameter4 = inputMessage;
+      strncpy(myParameter4, inputMessage, sizeof(myParameter4) - 1); 
+      myParameter4[sizeof(myParameter4) - 1] = '\0';
     }
     else if (request->hasParam(PARAM_INPUT_5)) {
-      inputMessage = request->getParam(PARAM_INPUT_5)->value();
+      inputMessage = request->getParam(PARAM_INPUT_5)->value().c_str(); 
       inputParam = PARAM_INPUT_5; 
-      myParameter5 = inputMessage;
+      strncpy(myParameter5, inputMessage, sizeof(myParameter5) - 1); 
+      myParameter5[sizeof(myParameter5) - 1] = '\0';
     }
     else {
+      // Direct assignment of string literals is allowed for const char*
       inputMessage = "No message sent";
       inputParam = "none"; 
     }
-    Serial.println(inputMessage); 
+    Serial.println(inputMessage);
     //request->send(200, "text/html", "HTTP GET request sent to your ESP on input field (" + inputParam + ") with value: " + inputMessage + "<br><a href=\"/\">Return to Home Page</a>"); 
     request->send(200, "text/html", "Configuration updated successfully.<br><a href=\"/\">Return to Home Page</a>");
   });
@@ -315,24 +334,30 @@ void loop(){
     }
 
 
-  if(myParameter1.toInt() != 0){
+  if(atoi(myParameter1) != 0 || (myParameter1[0] == '0' && myParameter1[1] == '\0')){ // Check if it's non-zero or just "0"
     //If the value is non-zero then it means i have entered a new value
-    AC_Turn_On_Time_Hour = myParameter1.toInt();
-    AC_Turn_On_Time_Minute = myParameter2.toInt();
+    AC_Turn_On_Time_Hour = atoi(myParameter1);
+    AC_Turn_On_Time_Minute = atoi(myParameter2);
   }
 
-  if(myParameter3.toInt()>=18 && myParameter3.toInt()<=29){
-    TargetTemperature = myParameter3.toInt();
+  // Check temperature bounds
+  if(atoi(myParameter3)>=18 && atoi(myParameter3)<=29){
+    TargetTemperature = atoi(myParameter3);
   }
 
-  if(myParameter4.equalsIgnoreCase("h")){
+  // Compare mode (case-insensitive for 'h')
+  // strncasecmp(s1, s2, n) returns 0 if the first n characters are equal (case-insensitive)
+  if(strncasecmp(myParameter4, "h", 1) == 0){
     //we have set it to heat mode
-    myModeParameter = AC_MODE_HEATING - '0'; // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
+    myModeParameter = AC_MODE_HEATING - '0';
+    // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
     AC_Mode_State = "Heat";
   }
-  else if(myParameter4.equalsIgnoreCase("c")){
+  // Compare mode (case-insensitive for 'c')
+  else if(strncasecmp(myParameter4, "c", 1) == 0){
     //we have set it to cool mode
-    myModeParameter = AC_MODE_COOLING - '0'; // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
+    myModeParameter = AC_MODE_COOLING - '0';
+    // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
     AC_Mode_State = "Cool";
   }
   else{
@@ -340,11 +365,13 @@ void loop(){
     AC_Mode_State = "Error";
   }
 
-  if(myParameter5.toInt() == 1){
+  // Check runSystem (1)
+  if(atoi(myParameter5) == 1){
     runSystem = HIGH;
   }
-
-  if(myParameter5.toInt() == 0){
+  
+  // Check runSystem (0)
+  if(atoi(myParameter5) == 0){
     runSystem = LOW;
   }
   
