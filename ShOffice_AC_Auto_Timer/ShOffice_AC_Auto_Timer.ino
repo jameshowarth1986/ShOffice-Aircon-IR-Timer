@@ -35,6 +35,10 @@ int AC_Turn_On_Time_Minute = 00;
 const int AC_Mellow_Time_Hour = 07;
 const int AC_Turn_Mellow_Minute = 00;
 
+// --- NEW WIFI TIMER VARIABLES ---
+unsigned long previousWifiCheckMillis = 0;
+const long wifiCheckInterval = 10000; // Check every 10 seconds
+
 const char* PARAM_INPUT_1 = "input1";
 const char* PARAM_INPUT_2 = "input2";
 const char* PARAM_INPUT_3 = "input3";
@@ -215,6 +219,7 @@ void setup(){
   Serial.println(ssid);
   // This starts the connection process, but does NOT wait.
   // The ARDUINO_EVENT_WIFI_STA_GOT_IP event will handle the rest.
+  WiFi.setTxPower(WIFI_POWER_8_5dBm); // Lower power often leads to a more stable connection on C3
   WiFi.begin(ssid, password);
 
   // 3. Keep configTime and server.begin() *after* WiFi.begin() but you don't need to wait for the IP here.
@@ -315,6 +320,19 @@ void setup(){
 
 void loop(){
 
+  unsigned long currentMillis = millis();
+
+  // --- NEW RECONNECTION LOGIC ---
+  // If WiFi is down AND 10 seconds have passed, try to reconnect
+  if (WiFi.status() != WL_CONNECTED && (currentMillis - previousWifiCheckMillis >= wifiCheckInterval)) {
+    Serial.println("Reconnecting to WiFi...");
+    WiFi.disconnect(); 
+    WiFi.reconnect(); // or WiFi.begin(ssid, password);
+    previousWifiCheckMillis = currentMillis;
+    Wifi_State = "reconnecting";
+  }
+  // ------------------------------
+
   // --- Add Periodic Time Synchronization Check ---
     if (WiFi.status() == WL_CONNECTED && (millis() - TimeIntervalPrevious >= TimeSyncInterval)) {
       // Re-run configuration and sync the time
@@ -362,7 +380,7 @@ void loop(){
   }
   else{
     //we have an error, do nothing
-    AC_Mode_State = "Error";
+    AC_Mode_State = "not set";
   }
 
   // Check runSystem (1)
@@ -425,7 +443,7 @@ void loop(){
     u8g2.setCursor(70, 80);
     u8g2.print(RunSystemStr);
     u8g2.drawStr(0,95, "Mode");
-    u8g2.setCursor(70, 95);
+    u8g2.setCursor(50, 95);
     u8g2.print(AC_Mode_State);
     
     //u8g2.drawStr(0,110, "Previous:");
@@ -529,7 +547,6 @@ void printLocalTime(){
 }
 
 void WiFiEvent(WiFiEvent_t event) {
-  //courtesy of Google Gemini
   switch (event) {
     case ARDUINO_EVENT_WIFI_READY:
       Serial.println("WiFi ready");
@@ -544,22 +561,19 @@ void WiFiEvent(WiFiEvent_t event) {
       Wifi_State = "connected";
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      Serial.println("WiFi lost connection, attempting to reconnect...");
-      // *** THE NON-BLOCKING RECONNECTION STEP ***
-      // Call WiFi.begin() to reconnect. The ESP32 handles the retries.
-      WiFi.begin(ssid, password);
-      TimeSyncSuccessBool = false; // Indicate time may be stale
+      Serial.println("WiFi lost connection...");
+      // *** CRITICAL FIX HERE *** // We REMOVED WiFi.begin() from here.
+      // We let the main loop() handle the reconnection every 10 seconds.
+      TimeSyncSuccessBool = false;
       Wifi_State = "disconnected";
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       Serial.print("IP Address: ");
       Serial.println(WiFi.localIP());
-      // Re-initialize and get the time after a successful connection/reconnection
+      // Re-initialize and get the time after a successful connection
       configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
       printLocalTime();
       Wifi_State = "GOT IP";
-      // Restart the server if it was stopped (optional, depends on AsyncWebServer library behavior)
-      // server.begin();
       break;
     default:
       break;
