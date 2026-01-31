@@ -139,7 +139,8 @@ const char* password = "workworkwork";
 
 //const char* ssid = "VM2681428";
 //const char* password = "Zt5hgrrw8Ktc";
-
+// This string covers GMT and BST transitions automatically
+const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0";
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 0; //For use in British summer time set to 3600, for winter set to 0(BST)
@@ -336,7 +337,8 @@ void loop(){
   // --- Add Periodic Time Synchronization Check ---
     if (WiFi.status() == WL_CONNECTED && (millis() - TimeIntervalPrevious >= TimeSyncInterval)) {
       // Re-run configuration and sync the time
-      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      configTzTime(TZ_INFO, ntpServer);
       printLocalTime(); // This is where the actual time sync is requested
 
       TimeIntervalPrevious = millis();
@@ -571,7 +573,8 @@ void WiFiEvent(WiFiEvent_t event) {
       Serial.print("IP Address: ");
       Serial.println(WiFi.localIP());
       // Re-initialize and get the time after a successful connection
-      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); //replacing with below
+      configTzTime(TZ_INFO, ntpServer);
       printLocalTime();
       Wifi_State = "GOT IP";
       break;
