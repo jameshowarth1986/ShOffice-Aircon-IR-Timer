@@ -101,32 +101,51 @@ int myInteger3 = 0;
 
 Adafruit_AM2320 am2320 = Adafruit_AM2320();
 
-// HTML web page to handle 3 input fields (input1, input2, input3)
+//web page that can handle multiple inputs at the same time
+// Change the variable name to index_html_template to avoid confusion
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
-  <title>ESP Input Form</title>
+  <title>AC Controller</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  </head><body>
+  <style>
+    body { font-family: Arial; text-align: center; margin-top: 30px; }
+    form { display: inline-block; text-align: left; background: #f2f2f2; padding: 20px; border-radius: 10px; }
+    .row { margin: 10px 0; }
+    label { display: inline-block; width: 160px; font-weight: bold; }
+    input[type="text"] { width: 60px; }
+    .hint { font-size: 0.8em; color: #666; }
+  </style>
+</head><body>
+  <h2>AC Configuration</h2>
   <form action="/get">
-    Hour Start: <input type="text" name="input1">
-    <input type="submit" value="Submit">
-  </form><br>
-  <form action="/get">
-    Minute Start: <input type="text" name="input2">
-    <input type="submit" value="Submit">
-  </form><br>
-  <form action="/get">
-    Target Temperature (C): <input type="text" name="input3">
-    <input type="submit" value="Submit">
-  </form><br>
-  <form action="/get">
-    AC Mode (h/c): <input type="text" name="input4">
-    <input type="submit" value="Submit">
+    <div class="row">
+      <label>Hour Start:</label>
+      <input type="text" name="input1" placeholder="%HOUR%">
+      <span class="hint">(Current: %HOUR%)</span>
+    </div>
+    <div class="row">
+      <label>Minute Start:</label>
+      <input type="text" name="input2" placeholder="%MIN%">
+      <span class="hint">(Current: %MIN%)</span>
+    </div>
+    <div class="row">
+      <label>Temp Setpoint:</label>
+      <input type="text" name="input3" placeholder="%TEMP%">
+      <span class="hint">(Current: %TEMP%C)</span>
+    </div>
+    <div class="row">
+      <label>Mode (h/c):</label>
+      <input type="text" name="input4" placeholder="%MODE%">
+      <span class="hint">(Current: %MODE%)</span>
+    </div>
+    <div class="row">
+      <label>System Run (1/0):</label>
+      <input type="text" name="input5" placeholder="%RUN%">
+      <span class="hint">(Current: %RUN%)</span>
+    </div>
+    <input type="submit" value="Update Settings">
   </form>
-  <form action="/get">
-    System Run (1/0): <input type="text" name="input5">
-    <input type="submit" value="Submit">
-  </form>
+  <p><a href="/">Refresh Status</a></p>
 </body></html>)rawliteral";
 
 void notFound(AsyncWebServerRequest* request) {
@@ -207,6 +226,15 @@ char DisplayHumidity[3];
 int timeSinceMidnightMinutes = 0;
 bool TimeSyncSuccessBool = false;
 
+String processor(const String& var) {
+  if (var == "HOUR") return String(myParameter1);
+  if (var == "MIN")  return String(myParameter2);
+  if (var == "TEMP") return String(myParameter3);
+  if (var == "MODE") return String(myParameter4);
+  if (var == "RUN")  return String(myParameter5);
+  return String();
+}
+
 void setup(){
   Serial.begin(115200);
 
@@ -228,61 +256,46 @@ void setup(){
   // 3. ASYNC WEB SERVER SETUP (Define ALL routes and start ONCE)
   
   // Route for the homepage ("/") 
+  // Route for the homepage ("/") 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-    request->send_P(200, "text/html", index_html);
+  // The 'processor' argument tells the server to replace the %TAGS%
+    request->send_P(200, "text/html", index_html, processor);
   });
 
-  // Route for the form submission ("/get")
   server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // Change char array to const char*
-    const char* inputMessage; 
-    const char* inputParam;
+    // 1. Check Hour - Only update if NOT empty
+    if (request->hasParam(PARAM_INPUT_1) && request->getParam(PARAM_INPUT_1)->value().length() > 0) {
+        const char* val = request->getParam(PARAM_INPUT_1)->value().c_str();
+        strncpy(myParameter1, val, sizeof(myParameter1) - 1);
+        myParameter1[sizeof(myParameter1) - 1] = '\0';
+    }
+    // 2. Check Minute
+    if (request->hasParam(PARAM_INPUT_2) && request->getParam(PARAM_INPUT_2)->value().length() > 0) {
+        const char* val = request->getParam(PARAM_INPUT_2)->value().c_str();
+        strncpy(myParameter2, val, sizeof(myParameter2) - 1);
+        myParameter2[sizeof(myParameter2) - 1] = '\0';
+    }
+    // 3. Check Temperature
+    if (request->hasParam(PARAM_INPUT_3) && request->getParam(PARAM_INPUT_3)->value().length() > 0) {
+        const char* val = request->getParam(PARAM_INPUT_3)->value().c_str();
+        strncpy(myParameter3, val, sizeof(myParameter3) - 1);
+        myParameter3[sizeof(myParameter3) - 1] = '\0';
+    }
+    // 4. Check Mode
+    if (request->hasParam(PARAM_INPUT_4) && request->getParam(PARAM_INPUT_4)->value().length() > 0) {
+        const char* val = request->getParam(PARAM_INPUT_4)->value().c_str();
+        strncpy(myParameter4, val, sizeof(myParameter4) - 1);
+        myParameter4[sizeof(myParameter4) - 1] = '\0';
+    }
+    // 5. Check System Run
+    if (request->hasParam(PARAM_INPUT_5) && request->getParam(PARAM_INPUT_5)->value().length() > 0) {
+        const char* val = request->getParam(PARAM_INPUT_5)->value().c_str();
+        strncpy(myParameter5, val, sizeof(myParameter5) - 1);
+        myParameter5[sizeof(myParameter5) - 1] = '\0';
+    }
 
-    // GET input1 value on <ESP_IP>/get?input1=<inputMessage> 
-    if (request->hasParam(PARAM_INPUT_1)) {
-      // Use c_str() to get a const char* from the String object
-      inputMessage = request->getParam(PARAM_INPUT_1)->value().c_str(); 
-      inputParam = PARAM_INPUT_1; 
-      // Safely copy the C-string into the char array
-      // sizeof(myParameter1) is 4
-      strncpy(myParameter1, inputMessage, sizeof(myParameter1) - 1); 
-      myParameter1[sizeof(myParameter1) - 1] = '\0'; // Null-terminate
-    }
-    // GET input2 value on <ESP_IP>/get?input2=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_2)) {
-      inputMessage = request->getParam(PARAM_INPUT_2)->value().c_str(); 
-      inputParam = PARAM_INPUT_2; 
-      strncpy(myParameter2, inputMessage, sizeof(myParameter2) - 1); 
-      myParameter2[sizeof(myParameter2) - 1] = '\0';
-    }
-    // GET input3 value on <ESP_IP>/get?input3=<inputMessage> 
-    else if (request->hasParam(PARAM_INPUT_3)) {
-      inputMessage = request->getParam(PARAM_INPUT_3)->value().c_str(); 
-      inputParam = PARAM_INPUT_3; 
-      strncpy(myParameter3, inputMessage, sizeof(myParameter3) - 1); 
-      myParameter3[sizeof(myParameter3) - 1] = '\0';
-    } 
-    // GET input4 value on <ESP_IP>/get?input4=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_4)) {
-      inputMessage = request->getParam(PARAM_INPUT_4)->value().c_str(); 
-      inputParam = PARAM_INPUT_4;
-      strncpy(myParameter4, inputMessage, sizeof(myParameter4) - 1); 
-      myParameter4[sizeof(myParameter4) - 1] = '\0';
-    }
-    else if (request->hasParam(PARAM_INPUT_5)) {
-      inputMessage = request->getParam(PARAM_INPUT_5)->value().c_str(); 
-      inputParam = PARAM_INPUT_5; 
-      strncpy(myParameter5, inputMessage, sizeof(myParameter5) - 1); 
-      myParameter5[sizeof(myParameter5) - 1] = '\0';
-    }
-    else {
-      // Direct assignment of string literals is allowed for const char*
-      inputMessage = "No message sent";
-      inputParam = "none"; 
-    }
-    Serial.println(inputMessage);
-    //request->send(200, "text/html", "HTTP GET request sent to your ESP on input field (" + inputParam + ") with value: " + inputMessage + "<br><a href=\"/\">Return to Home Page</a>"); 
-    request->send(200, "text/html", "Configuration updated successfully.<br><a href=\"/\">Return to Home Page</a>");
+    Serial.println("Selective update processed.");
+    request->send(200, "text/html", "Settings processed.<br><a href=\"/\">Return to Home</a>");
   });
   
   // Set the fallback for unhandled routes
