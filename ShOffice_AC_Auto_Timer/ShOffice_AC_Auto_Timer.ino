@@ -47,9 +47,9 @@ const char* PARAM_INPUT_5 = "input5";
 
 // Use fixed-size char arrays instead of String for better memory stability
 // We assume inputs are short (e.g., up to 10 characters)
-char myParameter1[4] = "xx"; // Default Hour
-char myParameter2[4] = "xx"; // Default Minute
-char myParameter3[4] = "xx"; // Default Temperature
+char myParameter1[4] = "05"; // Default Hour
+char myParameter2[4] = "00"; // Default Minute
+char myParameter3[4] = "21"; // Default Temperature
 char myParameter4[4] = "xx";  // Default Mode (h/c)
 char myParameter5[4] = "xx";  // Default System Run (1/0)
 
@@ -109,41 +109,27 @@ const char index_html[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: Arial; text-align: center; margin-top: 30px; }
-    form { display: inline-block; text-align: left; background: #f2f2f2; padding: 20px; border-radius: 10px; }
+    form { display: inline-block; text-align: left; background: #f2f2f2; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
     .row { margin: 10px 0; }
     label { display: inline-block; width: 160px; font-weight: bold; }
-    input[type="text"] { width: 60px; }
-    .hint { font-size: 0.8em; color: #666; }
+    .trigger-btn { background-color: #ff4c4c; color: white; border: none; padding: 15px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; }
+    input[type="submit"] { width: 100%; height: 30px; }
   </style>
 </head><body>
   <h2>AC Configuration</h2>
   <form action="/get">
-    <div class="row">
-      <label>Hour Start:</label>
-      <input type="text" name="input1" placeholder="%HOUR%">
-      <span class="hint">(Current: %HOUR%)</span>
-    </div>
-    <div class="row">
-      <label>Minute Start:</label>
-      <input type="text" name="input2" placeholder="%MIN%">
-      <span class="hint">(Current: %MIN%)</span>
-    </div>
-    <div class="row">
-      <label>Temp Setpoint:</label>
-      <input type="text" name="input3" placeholder="%TEMP%">
-      <span class="hint">(Current: %TEMP%C)</span>
-    </div>
-    <div class="row">
-      <label>Mode (h/c):</label>
-      <input type="text" name="input4" placeholder="%MODE%">
-      <span class="hint">(Current: %MODE%)</span>
-    </div>
-    <div class="row">
-      <label>System Run (1/0):</label>
-      <input type="text" name="input5" placeholder="%RUN%">
-      <span class="hint">(Current: %RUN%)</span>
-    </div>
+    <div class="row"><label>Hour Start:</label><input type="text" name="input1" placeholder="%HOUR%"></div>
+    <div class="row"><label>Minute Start:</label><input type="text" name="input2" placeholder="%MIN%"></div>
+    <div class="row"><label>Temp Setpoint:</label><input type="text" name="input3" placeholder="%TEMP%"></div>
+    <div class="row"><label>Mode (h/c):</label><input type="text" name="input4" placeholder="%MODE%"></div>
+    <div class="row"><label>System Run (1/0):</label><input type="text" name="input5" placeholder="%RUN%"></div>
     <input type="submit" value="Update Settings">
+  </form>
+
+  <br>
+
+  <form action="/trigger">
+    <button type="submit" class="trigger-btn">SEND IR COMMANDS NOW</button>
   </form>
   <p><a href="/">Refresh Status</a></p>
 </body></html>)rawliteral";
@@ -191,7 +177,7 @@ int TimeSyncInterval = (1000*60*60*6); //synchronise time every 6 hours
 int TimeIntervalPrevious = 0;
 
 //Intervals for updating the OLEd
-int OLEDUpdateInterval = 200; //200ms updates at 5Hz
+int OLEDUpdateInterval = 500; //500ms updates at 2Hz
 int OLEDUpdateIntervalPrevious = 0;
 
 //Intervals for getting temperature
@@ -259,44 +245,48 @@ void setup(){
   // Route for the homepage ("/") 
   // Route for the homepage ("/") 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-  // The 'processor' argument tells the server to replace the %TAGS%
     request->send_P(200, "text/html", index_html, processor);
   });
 
+  server.on("/trigger", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (IRCommandStep == 0) { // Only start if not already sending [cite: 93]
+        IRCommandStep = 1; 
+        previousIRMillis = millis(); // Initialize the non-blocking timer [cite: 94]
+        Serial.println("Manual IR Triggered via Web");
+        request->send(200, "text/html", "IR Sequence Started!<br><a href=\"/\">Return</a>");
+    } else {
+        request->send(200, "text/html", "Sequence already in progress.<br><a href=\"/\">Return</a>");
+    }
+    });
+
+  // FIX 2: Update /get to handle multiple parameters [cite: 50-60]
   server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // 1. Check Hour - Only update if NOT empty
-    if (request->hasParam(PARAM_INPUT_1) && request->getParam(PARAM_INPUT_1)->value().length() > 0) {
-        const char* val = request->getParam(PARAM_INPUT_1)->value().c_str();
-        strncpy(myParameter1, val, sizeof(myParameter1) - 1);
-        myParameter1[sizeof(myParameter1) - 1] = '\0';
+    // Check each parameter independently (no 'else if')
+    // Only update if the parameter exists AND has a value (length > 0)
+    
+    if (request->hasParam("input1") && request->getParam("input1")->value().length() > 0) {
+      strncpy(myParameter1, request->getParam("input1")->value().c_str(), sizeof(myParameter1) - 1);
+      myParameter1[sizeof(myParameter1) - 1] = '\0';
     }
-    // 2. Check Minute
-    if (request->hasParam(PARAM_INPUT_2) && request->getParam(PARAM_INPUT_2)->value().length() > 0) {
-        const char* val = request->getParam(PARAM_INPUT_2)->value().c_str();
-        strncpy(myParameter2, val, sizeof(myParameter2) - 1);
-        myParameter2[sizeof(myParameter2) - 1] = '\0';
+    if (request->hasParam("input2") && request->getParam("input2")->value().length() > 0) {
+      strncpy(myParameter2, request->getParam("input2")->value().c_str(), sizeof(myParameter2) - 1);
+      myParameter2[sizeof(myParameter2) - 1] = '\0';
     }
-    // 3. Check Temperature
-    if (request->hasParam(PARAM_INPUT_3) && request->getParam(PARAM_INPUT_3)->value().length() > 0) {
-        const char* val = request->getParam(PARAM_INPUT_3)->value().c_str();
-        strncpy(myParameter3, val, sizeof(myParameter3) - 1);
-        myParameter3[sizeof(myParameter3) - 1] = '\0';
+    if (request->hasParam("input3") && request->getParam("input3")->value().length() > 0) {
+      strncpy(myParameter3, request->getParam("input3")->value().c_str(), sizeof(myParameter3) - 1);
+      myParameter3[sizeof(myParameter3) - 1] = '\0';
     }
-    // 4. Check Mode
-    if (request->hasParam(PARAM_INPUT_4) && request->getParam(PARAM_INPUT_4)->value().length() > 0) {
-        const char* val = request->getParam(PARAM_INPUT_4)->value().c_str();
-        strncpy(myParameter4, val, sizeof(myParameter4) - 1);
-        myParameter4[sizeof(myParameter4) - 1] = '\0';
+    if (request->hasParam("input4") && request->getParam("input4")->value().length() > 0) {
+      strncpy(myParameter4, request->getParam("input4")->value().c_str(), sizeof(myParameter4) - 1);
+      myParameter4[sizeof(myParameter4) - 1] = '\0';
     }
-    // 5. Check System Run
-    if (request->hasParam(PARAM_INPUT_5) && request->getParam(PARAM_INPUT_5)->value().length() > 0) {
-        const char* val = request->getParam(PARAM_INPUT_5)->value().c_str();
-        strncpy(myParameter5, val, sizeof(myParameter5) - 1);
-        myParameter5[sizeof(myParameter5) - 1] = '\0';
+    if (request->hasParam("input5") && request->getParam("input5")->value().length() > 0) {
+      strncpy(myParameter5, request->getParam("input5")->value().c_str(), sizeof(myParameter5) - 1);
+      myParameter5[sizeof(myParameter5) - 1] = '\0';
     }
 
-    Serial.println("Selective update processed.");
-    request->send(200, "text/html", "Settings processed.<br><a href=\"/\">Return to Home</a>");
+    Serial.println("Settings Updated");
+    request->send(200, "text/html", "Configuration updated.<br><a href=\"/\">Return</a>");
   });
   
   // Set the fallback for unhandled routes
