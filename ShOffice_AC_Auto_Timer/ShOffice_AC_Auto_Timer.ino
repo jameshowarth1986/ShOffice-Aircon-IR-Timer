@@ -101,7 +101,8 @@ int myInteger3 = 0;
 
 Adafruit_AM2320 am2320 = Adafruit_AM2320();
 
-// HTML web page to handle 3 input fields (input1, input2, input3)
+//web page that can handle multiple inputs at the same time
+// Change the variable name to index_html_template to avoid confusion
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
   <title>AC Controller</title>
@@ -130,6 +131,7 @@ const char index_html[] PROGMEM = R"rawliteral(
   <form action="/trigger">
     <button type="submit" class="trigger-btn">SEND IR COMMANDS NOW</button>
   </form>
+  <p><a href="/">Refresh Status</a></p>
 </body></html>)rawliteral";
 
 void notFound(AsyncWebServerRequest* request) {
@@ -240,6 +242,7 @@ void setup(){
 
   // 3. ASYNC WEB SERVER SETUP (Define ALL routes and start ONCE)
   
+  // Route for the homepage ("/") 
   // Route for the homepage ("/") 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send_P(200, "text/html", index_html, processor);
