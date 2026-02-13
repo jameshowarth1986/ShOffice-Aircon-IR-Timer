@@ -47,9 +47,9 @@ const char* PARAM_INPUT_5 = "input5";
 
 // Use fixed-size char arrays instead of String for better memory stability
 // We assume inputs are short (e.g., up to 10 characters)
-char myParameter1[4] = "xx"; // Default Hour
-char myParameter2[4] = "xx"; // Default Minute
-char myParameter3[4] = "xx"; // Default Temperature
+char myParameter1[4] = "05"; // Default Hour
+char myParameter2[4] = "00"; // Default Minute
+char myParameter3[4] = "21"; // Default Temperature
 char myParameter4[4] = "xx";  // Default Mode (h/c)
 char myParameter5[4] = "xx";  // Default System Run (1/0)
 
@@ -104,28 +104,31 @@ Adafruit_AM2320 am2320 = Adafruit_AM2320();
 // HTML web page to handle 3 input fields (input1, input2, input3)
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
-  <title>ESP Input Form</title>
+  <title>AC Controller</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  </head><body>
+  <style>
+    body { font-family: Arial; text-align: center; margin-top: 30px; }
+    form { display: inline-block; text-align: left; background: #f2f2f2; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+    .row { margin: 10px 0; }
+    label { display: inline-block; width: 160px; font-weight: bold; }
+    .trigger-btn { background-color: #ff4c4c; color: white; border: none; padding: 15px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; }
+    input[type="submit"] { width: 100%; height: 30px; }
+  </style>
+</head><body>
+  <h2>AC Configuration</h2>
   <form action="/get">
-    Hour Start: <input type="text" name="input1">
-    <input type="submit" value="Submit">
-  </form><br>
-  <form action="/get">
-    Minute Start: <input type="text" name="input2">
-    <input type="submit" value="Submit">
-  </form><br>
-  <form action="/get">
-    Target Temperature (C): <input type="text" name="input3">
-    <input type="submit" value="Submit">
-  </form><br>
-  <form action="/get">
-    AC Mode (h/c): <input type="text" name="input4">
-    <input type="submit" value="Submit">
+    <div class="row"><label>Hour Start:</label><input type="text" name="input1" placeholder="%HOUR%"></div>
+    <div class="row"><label>Minute Start:</label><input type="text" name="input2" placeholder="%MIN%"></div>
+    <div class="row"><label>Temp Setpoint:</label><input type="text" name="input3" placeholder="%TEMP%"></div>
+    <div class="row"><label>Mode (h/c):</label><input type="text" name="input4" placeholder="%MODE%"></div>
+    <div class="row"><label>System Run (1/0):</label><input type="text" name="input5" placeholder="%RUN%"></div>
+    <input type="submit" value="Update Settings">
   </form>
-  <form action="/get">
-    System Run (1/0): <input type="text" name="input5">
-    <input type="submit" value="Submit">
+
+  <br>
+
+  <form action="/trigger">
+    <button type="submit" class="trigger-btn">SEND IR COMMANDS NOW</button>
   </form>
 </body></html>)rawliteral";
 
@@ -172,7 +175,7 @@ int TimeSyncInterval = (1000*60*60*6); //synchronise time every 6 hours
 int TimeIntervalPrevious = 0;
 
 //Intervals for updating the OLEd
-int OLEDUpdateInterval = 200; //200ms updates at 5Hz
+int OLEDUpdateInterval = 500; //500ms updates at 2Hz
 int OLEDUpdateIntervalPrevious = 0;
 
 //Intervals for getting temperature
@@ -208,6 +211,15 @@ char DisplayHumidity[3];
 int timeSinceMidnightMinutes = 0;
 bool TimeSyncSuccessBool = false;
 
+String processor(const String& var) {
+  if (var == "HOUR") return String(myParameter1);
+  if (var == "MIN")  return String(myParameter2);
+  if (var == "TEMP") return String(myParameter3);
+  if (var == "MODE") return String(myParameter4);
+  if (var == "RUN")  return String(myParameter5);
+  return String();
+}
+
 void setup(){
   Serial.begin(115200);
 
@@ -230,60 +242,48 @@ void setup(){
   
   // Route for the homepage ("/") 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-    request->send_P(200, "text/html", index_html);
+    request->send_P(200, "text/html", index_html, processor);
   });
 
-  // Route for the form submission ("/get")
-  server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // Change char array to const char*
-    const char* inputMessage; 
-    const char* inputParam;
-
-    // GET input1 value on <ESP_IP>/get?input1=<inputMessage> 
-    if (request->hasParam(PARAM_INPUT_1)) {
-      // Use c_str() to get a const char* from the String object
-      inputMessage = request->getParam(PARAM_INPUT_1)->value().c_str(); 
-      inputParam = PARAM_INPUT_1; 
-      // Safely copy the C-string into the char array
-      // sizeof(myParameter1) is 4
-      strncpy(myParameter1, inputMessage, sizeof(myParameter1) - 1); 
-      myParameter1[sizeof(myParameter1) - 1] = '\0'; // Null-terminate
+  server.on("/trigger", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (IRCommandStep == 0) { // Only start if not already sending [cite: 93]
+        IRCommandStep = 1; 
+        previousIRMillis = millis(); // Initialize the non-blocking timer [cite: 94]
+        Serial.println("Manual IR Triggered via Web");
+        request->send(200, "text/html", "IR Sequence Started!<br><a href=\"/\">Return</a>");
+    } else {
+        request->send(200, "text/html", "Sequence already in progress.<br><a href=\"/\">Return</a>");
     }
-    // GET input2 value on <ESP_IP>/get?input2=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_2)) {
-      inputMessage = request->getParam(PARAM_INPUT_2)->value().c_str(); 
-      inputParam = PARAM_INPUT_2; 
-      strncpy(myParameter2, inputMessage, sizeof(myParameter2) - 1); 
+    });
+
+  // FIX 2: Update /get to handle multiple parameters [cite: 50-60]
+  server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
+    // Check each parameter independently (no 'else if')
+    // Only update if the parameter exists AND has a value (length > 0)
+    
+    if (request->hasParam("input1") && request->getParam("input1")->value().length() > 0) {
+      strncpy(myParameter1, request->getParam("input1")->value().c_str(), sizeof(myParameter1) - 1);
+      myParameter1[sizeof(myParameter1) - 1] = '\0';
+    }
+    if (request->hasParam("input2") && request->getParam("input2")->value().length() > 0) {
+      strncpy(myParameter2, request->getParam("input2")->value().c_str(), sizeof(myParameter2) - 1);
       myParameter2[sizeof(myParameter2) - 1] = '\0';
     }
-    // GET input3 value on <ESP_IP>/get?input3=<inputMessage> 
-    else if (request->hasParam(PARAM_INPUT_3)) {
-      inputMessage = request->getParam(PARAM_INPUT_3)->value().c_str(); 
-      inputParam = PARAM_INPUT_3; 
-      strncpy(myParameter3, inputMessage, sizeof(myParameter3) - 1); 
+    if (request->hasParam("input3") && request->getParam("input3")->value().length() > 0) {
+      strncpy(myParameter3, request->getParam("input3")->value().c_str(), sizeof(myParameter3) - 1);
       myParameter3[sizeof(myParameter3) - 1] = '\0';
-    } 
-    // GET input4 value on <ESP_IP>/get?input4=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_4)) {
-      inputMessage = request->getParam(PARAM_INPUT_4)->value().c_str(); 
-      inputParam = PARAM_INPUT_4;
-      strncpy(myParameter4, inputMessage, sizeof(myParameter4) - 1); 
+    }
+    if (request->hasParam("input4") && request->getParam("input4")->value().length() > 0) {
+      strncpy(myParameter4, request->getParam("input4")->value().c_str(), sizeof(myParameter4) - 1);
       myParameter4[sizeof(myParameter4) - 1] = '\0';
     }
-    else if (request->hasParam(PARAM_INPUT_5)) {
-      inputMessage = request->getParam(PARAM_INPUT_5)->value().c_str(); 
-      inputParam = PARAM_INPUT_5; 
-      strncpy(myParameter5, inputMessage, sizeof(myParameter5) - 1); 
+    if (request->hasParam("input5") && request->getParam("input5")->value().length() > 0) {
+      strncpy(myParameter5, request->getParam("input5")->value().c_str(), sizeof(myParameter5) - 1);
       myParameter5[sizeof(myParameter5) - 1] = '\0';
     }
-    else {
-      // Direct assignment of string literals is allowed for const char*
-      inputMessage = "No message sent";
-      inputParam = "none"; 
-    }
-    Serial.println(inputMessage);
-    //request->send(200, "text/html", "HTTP GET request sent to your ESP on input field (" + inputParam + ") with value: " + inputMessage + "<br><a href=\"/\">Return to Home Page</a>"); 
-    request->send(200, "text/html", "Configuration updated successfully.<br><a href=\"/\">Return to Home Page</a>");
+
+    Serial.println("Settings Updated");
+    request->send(200, "text/html", "Configuration updated.<br><a href=\"/\">Return</a>");
   });
   
   // Set the fallback for unhandled routes
