@@ -1,105 +1,89 @@
-/*
-  Rui Santos
-  Complete project details at https://RandomNerdTutorials.com/esp32-date-time-ntp-client-server-arduino/
-  
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files.
-  
-  The above copyright notice and this permission notice shall be included in all
-  copies or substantial portions of the Software.
-*/
-//replacing strings with char arrays to improve stability
-#include <Arduino.h>
-#include <WiFi.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h> //using version 3.6.0 works. careful when updating
-#include <time.h>
-#include <U8g2lib.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_AM2320.h>
-
-AsyncWebServer server(80);
-
-//set up some of our AC default conditions
-int myCommand = 0;
-int myParameter = 0;
-int myModeParameter = 0;
-int myTemperatureParameter = 0;
-int myFanSpeedParameter = 0;
-int TargetTemperature = 21;
-
-//set up time variables for turning system on and off
-int AC_Turn_On_Time_Hour = 05;
-int AC_Turn_On_Time_Minute = 00;
-
-const int AC_Mellow_Time_Hour = 07;
-const int AC_Turn_Mellow_Minute = 00;
-
-// --- NEW WIFI TIMER VARIABLES ---
-unsigned long previousWifiCheckMillis = 0;
-const long wifiCheckInterval = 10000; // Check every 10 seconds
-
-const char* PARAM_INPUT_1 = "input1";
-const char* PARAM_INPUT_2 = "input2";
-const char* PARAM_INPUT_3 = "input3";
-const char* PARAM_INPUT_4 = "input4";
-const char* PARAM_INPUT_5 = "input5";
-
-// Use fixed-size char arrays instead of String for better memory stability
-// We assume inputs are short (e.g., up to 10 characters)
-char myParameter1[4] = "05"; // Default Hour
-char myParameter2[4] = "00"; // Default Minute
-char myParameter3[4] = "21"; // Default Temperature
-char myParameter4[4] = "xx";  // Default Mode (h/c)
-char myParameter5[4] = "xx";  // Default System Run (1/0)
-
-char displayStartTimeHour [2]= {'h','h'};
-char displayStartTimeMinute [2] = {'m','m'};
-
-bool FirstLoopComplete = 0;
-
-
-int myInteger1 = 0;
-int myInteger2 = 0;
-int myInteger3 = 0;
-
-//==============================================================
-// INSERT ALL OF THE AIRCON IR CONTROL STUFF
-//==============================================================
-  /*
-  * LG2 has different header timing and a shorter bit time
-  * Known LG remote controls, which uses LG2 protocol are:
-  * AKB75215403
-  * AKB74955603
-  * AKB73757604:
-  */
-  //#define USE_LG2_PROTOCOL // Try it if you do not have success with the default LG protocol
-  #define NUMBER_OF_COMMANDS_BETWEEN_PRINT_OF_MENU 5
-
-  #define DISABLE_CODE_FOR_RECEIVER // Disables restarting receiver after each send. Saves 450 bytes program memory and 269 bytes RAM if receiving functions are not used.
-
-  #define INFO // Deactivate this to save program memory and suppress info output from the LG-AC driver.
-  //#define DEBUG // Activate this for more output from the LG-AC driver.
-
-  #include "PinDefinitionsAndMore.h" // Define macros for input and output pin etc.
+// --- 1. Libraries ---
+  #include <Arduino.h>
+  #include <WiFi.h>
+  #include <AsyncTCP.h>
+  #include <ESPAsyncWebServer.h>
+  #include <time.h>
+  #include <U8g2lib.h>
+  #include "PinDefinitionsAndMore.h"
   #include <IRremote.hpp>
-
-  #if defined(__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__) || defined(__AVR_ATtiny87__) || defined(__AVR_ATtiny167__)
-  #include "ATtinySerialOut.hpp" // Available as Arduino library "ATtinySerialOut"
-  #endif
-
   #include "ac_LG.hpp"
 
-  #define SIZE_OF_RECEIVE_BUFFER 10
-  char sRequestString[SIZE_OF_RECEIVE_BUFFER];
-
+// --- 2. Hardware Objects ---
+  AsyncWebServer server(80); 
   Aircondition_LG MyLG_Aircondition;
-//==============================================================
-// END OF ALL OF THE AIRCON IR CONTROL STUFF
-//==============================================================
+  U8G2_SH1107_SEEED_128X128_F_HW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE); 
 
+// --- 3. Network & Time Constants ---
+  const char* ssid = "ShOffice_2_4GHz"; 
+  const char* password = "workworkwork"; 
+  const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0"; 
+  const char* ntpServer = "pool.ntp.org"; 
 
-Adafruit_AM2320 am2320 = Adafruit_AM2320();
+// --- 4. System State Variables ---
+  int TargetTemperature = 22; //default temperature set point 
+  int AC_Turn_On_Time_Hour = 5; //default start time hour i.e. 5am
+  int AC_Turn_On_Time_Minute = 0; //default start time minutes i.e. 00 past the hour
+  const int AC_Turn_Off_Time_Hour = 21; //power off time for AC
+  const int AC_Turn_Off_Time_Minute = 00; //power off time for AC
+  bool runSystem = 0; 
+  bool TimeSyncSuccessBool = false; 
+  bool AC_State_Previous = 0; 
+  unsigned long previousWifiCheckMillis = 0;
+  int myModeParameter = 0;
+  int myTemperatureParameter = 0;
+  int myCommand = 0;
+  int myParameter = 0;
+  String SystemState = "OFF";
+
+// --- 5. Parameters & Web Input Storage ---
+  char myParameter1[4] = "xx"; // Hour, use default from above to initialise
+  char myParameter2[4] = "xx"; // Minute, use default from above to initialise 
+  char myParameter3[4] = "22"; // Temp, use default from above to initialise 
+  char myParameter4[4] = "xx"; // Mode, set to xx to show it has not been initialised
+  char myParameter5[4] = "xx"; // Run, set to xx to show it has not been initialised
+
+// --- 6. Timing & IR Sequence ---
+  struct tm timenow; //time structure for getting network time and setting time within the code
+  unsigned long TimeIntervalPrevious = 0; //used for periodic time sync with the network ntp
+  const int TimeSyncInterval = (1000 * 60 * 60 * 6); // 6 Hours 
+
+  //IR Command timing and intervals
+  unsigned long previousIRMillis = 0; // Time since previous IR commands was sent
+  const long IRInterval = 2000;  // interval between sending successive IR commands
+  int IRCommandStep = 0; // used to enable triggers IR commands and know if we are currently sending them
+
+  //OLED interval timer
+  unsigned long OLEDUpdateIntervalPrevious = 0; //how long since our previous update to the OLED
+  const int OLEDUpdateInterval = 500; 
+
+  //timer interval for checking wifi status
+  const long wifiCheckInterval = 10000; // Check every 10 seconds
+  
+
+// --- 7. OLED Variables ---
+  char DisplayTimeWeekDay[10];
+  char DisplayTimeHour[3];
+  char DisplayTimeMinute[3];
+  char DisplayMidnightMinutes[5];
+  char DisplayTemperature[3];
+  char DisplayHumidity[3];
+  char displayStartTimeHour [2]= {'h','h'};
+  char displayStartTimeMinute [2] = {'m','m'};
+  String AC_Mode_State = "null";
+  String Wifi_State = "unknown"; 
+  String RunSystemStr = "INITIALISED";
+  String CurrentState = "INITIALISED";
+
+// --- 8. WebPage Presentation converter ---
+  String processor(const String& var) {
+    if (var == "HOUR") return String(myParameter1);
+    if (var == "MIN")  return String(myParameter2);
+    if (var == "TEMP") return String(myParameter3);
+    if (var == "MODE") return String(myParameter4);
+    if (var == "RUN")  return String(myParameter5);
+    return String();
+  }
 
 //web page that can handle multiple inputs at the same time
 // Change the variable name to index_html_template to avoid confusion
@@ -138,92 +122,11 @@ void notFound(AsyncWebServerRequest* request) {
   request->send(404, "text/plain", "Not found");
 }
 
-
-const char* ssid     = "ShOffice_2_4GHz";
-const char* password = "workworkwork";
-
-//const char* ssid = "VM2681428";
-//const char* password = "Zt5hgrrw8Ktc";
-// This string covers GMT and BST transitions automatically
-const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0";
-const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 0;
-const int   daylightOffset_sec = 0; //For use in British summer time set to 3600, for winter set to 0(BST)
-//#define runPin 23 //make sure there is a pull down resistor on the button, because it is a normally open type and if left floating the microcontroller gets confused. 
-#define GreenGoPin 5 // for green button
-#define RedStopPin 6
-bool runSystem = 0;
-String SystemState = "OFF";
-String AC_Mode_State = "null";
-String RunSystemStr = "INITIALISED";
-String CurrentState = "INITIALISED";
-String PreviousState = "INITIALISED";
-String Wifi_State = "unknown";
-
-unsigned long previousIRMillis = 0;
-const long IRInterval = 2000; // 2 seconds delay between IR commands
-int IRCommandStep = 0; // 0=Idle, 1=Send ON, 2=Send MODE, 3=Send TEMP
-
-
-
-
-
-const int AC_Turn_Off_Time_Hour = 21;
-const int AC_Turn_Off_Time_Minute = 00;
-
-//set up timers so we only run some functions when we need to
-//Intervals for syncing time with Wifi
-int TimeSyncInterval = (1000*60*60*6); //synchronise time every 6 hours
-int TimeIntervalPrevious = 0;
-
-//Intervals for updating the OLEd
-int OLEDUpdateInterval = 500; //500ms updates at 2Hz
-int OLEDUpdateIntervalPrevious = 0;
-
-//Intervals for getting temperature
-int TemperatureUpdateInterval = 15000;// about 15 seconds
-int TemperatureUpdateIntervalPrevious = 0;
-
-//define a tracker for knowing when the AC has been off or on, like a current state and last state
-//Treat 0 as off and 1 as on
-bool AC_State_Previous = 0;
-bool AC_State_Current = 0;
-
-int HumidityNow = 0;
-int TemperatureNow = 0;
-
-//const int   daylightOffset_sec = 0; //For use in winter 
-
-const int Christmas_Day = 358;
-int       Days_Until_Christmas = 0;
-
-//U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE); //no name OLED
-//U8G2_SH1107_SEEED_128X128_1_HW_I2C u8g2(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE); //Grove SEEED OLED Picture Loop Mode
-U8G2_SH1107_SEEED_128X128_F_HW_I2C u8g2(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE); //Grove SEEED OLED Full Page buffer mode - FAST
-
-//Time variables
-struct tm timenow;
-char DisplayTimeWeekDay[10];
-char DisplayTimeHour[3];
-char DisplayTimeMinute[3];
-char DisplayMidnightMinutes[5];
-char DisplayTemperature[3];
-char DisplayHumidity[3];
-
-int timeSinceMidnightMinutes = 0;
-bool TimeSyncSuccessBool = false;
-
-String processor(const String& var) {
-  if (var == "HOUR") return String(myParameter1);
-  if (var == "MIN")  return String(myParameter2);
-  if (var == "TEMP") return String(myParameter3);
-  if (var == "MODE") return String(myParameter4);
-  if (var == "RUN")  return String(myParameter5);
-  return String();
-}
-
 void setup(){
   Serial.begin(115200);
+
+  sprintf(myParameter1, "%02d", AC_Turn_On_Time_Hour);  
+  sprintf(myParameter2, "%02d", AC_Turn_On_Time_Minute);  
 
   // 1. REGISTER THE EVENT HANDLER
   WiFi.onEvent(WiFiEvent); // This tells the ESP32 to run WiFiEvent() on network changes
@@ -237,21 +140,14 @@ void setup(){
   WiFi.setTxPower(WIFI_POWER_8_5dBm); // Lower power often leads to a more stable connection on C3
   WiFi.begin(ssid, password);
 
-  // 3. Keep configTime and server.begin() *after* WiFi.begin() but you don't need to wait for the IP here.
-  // We recommend moving configTime and printLocalTime into the GOT_IP event handler for best practice.
-
-  // 3. ASYNC WEB SERVER SETUP (Define ALL routes and start ONCE)
-  
-  // Route for the homepage ("/") 
-  // Route for the homepage ("/") 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send_P(200, "text/html", index_html, processor);
   });
 
   server.on("/trigger", HTTP_GET, [](AsyncWebServerRequest* request) {
-    if (IRCommandStep == 0) { // Only start if not already sending [cite: 93]
+    if (IRCommandStep == 0) { // Only start if not already sending 
         IRCommandStep = 1; 
-        previousIRMillis = millis(); // Initialize the non-blocking timer [cite: 94]
+        previousIRMillis = millis(); // Initialize the non-blocking timer
         Serial.println("Manual IR Triggered via Web");
         request->send(200, "text/html", "IR Sequence Started!<br><a href=\"/\">Return</a>");
     } else {
@@ -259,11 +155,10 @@ void setup(){
     }
     });
 
-  // FIX 2: Update /get to handle multiple parameters [cite: 50-60]
+  // FIX 2: Update /get to handle multiple parameters 
   server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
     // Check each parameter independently (no 'else if')
     // Only update if the parameter exists AND has a value (length > 0)
-    
     if (request->hasParam("input1") && request->getParam("input1")->value().length() > 0) {
       strncpy(myParameter1, request->getParam("input1")->value().c_str(), sizeof(myParameter1) - 1);
       myParameter1[sizeof(myParameter1) - 1] = '\0';
@@ -314,11 +209,7 @@ void setup(){
 
   TimeIntervalPrevious = millis();
   u8g2.begin(); //initialise OLED Display 
-  am2320.begin();
-  //pinMode(runPin, INPUT);
-  pinMode(GreenGoPin, INPUT);
-  pinMode(RedStopPin, INPUT);
-  TemperatureUpdateIntervalPrevious = millis();
+  
   OLEDUpdateIntervalPrevious = millis();
 }
 
@@ -342,15 +233,6 @@ void loop(){
       // Re-run configuration and sync the time
       //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
       configTzTime(TZ_INFO, ntpServer);
-      printLocalTime(); // This is where the actual time sync is requested
-
-      TimeIntervalPrevious = millis();
-    }
-
-    
-    if (WiFi.status() == WL_CONNECTED && !TimeSyncSuccessBool) {
-      // Re-run configuration and sync the time
-      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
       printLocalTime(); // This is where the actual time sync is requested
 
       TimeIntervalPrevious = millis();
@@ -398,12 +280,6 @@ void loop(){
     runSystem = LOW;
   }
   
-  if(AC_State_Previous == 1){
-    PreviousState = "RUNNING";
-  }
-  else{
-    PreviousState = "OFF";
-  }
 
   if(runSystem == HIGH){
     RunSystemStr = "RUN";
@@ -450,10 +326,6 @@ void loop(){
     u8g2.drawStr(0,95, "Mode");
     u8g2.setCursor(50, 95);
     u8g2.print(AC_Mode_State);
-    
-    //u8g2.drawStr(0,110, "Previous:");
-    //u8g2.setCursor(80, 110);
-    //u8g2.print(PreviousState);
 
     u8g2.setFont(u8g2_font_profont22_tf);	// choose a bigger font for time
     u8g2.drawStr(37,30, DisplayTimeHour);
