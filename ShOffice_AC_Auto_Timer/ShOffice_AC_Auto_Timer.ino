@@ -219,6 +219,8 @@ void setup() {
   OLEDUpdateIntervalPrevious = millis();
 
   am2320.begin(); // The sensor joins the same bus
+  // SET I2C CLOCK TO 100kHz FOR STABILITY
+  Wire.setClock(100000);
 }
 
 void loop() {
@@ -468,16 +470,31 @@ void WiFiEvent(WiFiEvent_t event) {
 }
 
 void updateSensorReadings() {
-  // Only read every 5 seconds; AM2320 is slow and hates being rushed
+  // 1. Only read every 10 seconds to prevent sensor lock-up
   static unsigned long lastRead = 0;
-  if (millis() - lastRead < 5000) return;
+  if (millis() - lastRead < 10000) return; 
   lastRead = millis();
 
-  // The library handles the I2C wake-up pulse automatically
-  currentTemp = am2320.readTemperature();
-  currentHum = am2320.readHumidity();
+  // 2. Attempt to read
+  float t = am2320.readTemperature();
+  float h = am2320.readHumidity();
 
-  if (isnan(currentTemp) || isnan(currentHum)) {
-    Serial.println("AM2320 Error: Check I2C wiring (SDA/SCL)");
+  // 3. Check for failure [cite: 106]
+  if (isnan(t) || isnan(h)) {
+    static int errorCounter = 0;
+    errorCounter++;
+    Serial.printf("Sensor Read Failed (%d/5)\n", errorCounter);
+
+    // 4. If it fails 5 times in a row, try to jumpstart the sensor
+    if (errorCounter >= 5) {
+      Serial.println("Attempting I2C Sensor Reset...");
+      am2320.begin(); 
+      errorCounter = 0; // Reset counter to try again
+    }
+    return; 
   }
+
+  // If successful, update globals and reset error counter
+  currentTemp = t;
+  currentHum = h;
 }
