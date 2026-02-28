@@ -8,14 +8,14 @@
 #include "PinDefinitionsAndMore.h"
 #include <IRremote.hpp>
 #include "ac_LG.hpp"
-#include <Adafruit_AM2320.h>
+#include "Adafruit_MCP9808.h"
 
 
 // --- 2. Hardware Objects ---
 AsyncWebServer server(80);
 Aircondition_LG MyLG_Aircondition;
 U8G2_SH1107_SEEED_128X128_F_HW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
-Adafruit_AM2320 am2320 = Adafruit_AM2320();
+Adafruit_MCP9808 mcp = Adafruit_MCP9808();
 
 // --- 3. Network & Time Constants ---
 const char* ssid = "ShOffice_2_4GHz";
@@ -63,6 +63,10 @@ int IRCommandStep = 0;               // used to enable triggers IR commands and 
 //OLED interval timer
 unsigned long OLEDUpdateIntervalPrevious = 0;  //how long since our previous update to the OLED
 const int OLEDUpdateInterval = 500;
+
+//Temperature update interval timer
+unsigned long AM2320UpdateIntervalPrevious = 0;  //how long since our previous update of temperature sensor reading
+const int AM2320UpdateInterval = 10000; //about 10 seconds
 
 //timer interval for checking wifi status
 const long wifiCheckInterval = 10000;  // Check every 10 seconds
@@ -217,8 +221,16 @@ void setup() {
   TimeIntervalPrevious = millis();
   u8g2.begin();  //initialise OLED Display
   OLEDUpdateIntervalPrevious = millis();
+  AM2320UpdateIntervalPrevious = millis();
 
-  am2320.begin(); // The sensor joins the same bus
+  if (!mcp.begin(0x18)) { // Default I2C address is 0x18
+    Serial.println("Could not find MCP9808! Check wiring.");
+  } 
+  else {
+    mcp.setResolution(3); // Sets resolution to 0.0625°C
+    Serial.println("MCP9808 found!");
+  }
+
   // SET I2C CLOCK TO 100kHz FOR STABILITY
   Wire.setClock(100000);
 }
@@ -298,8 +310,12 @@ void loop() {
     RunSystemStr = "OFF";
   }
 
+  if (millis() - AM2320UpdateIntervalPrevious >= AM2320UpdateInterval){
+    updateSensorReadings();// get current temperature 
+    AM2320UpdateIntervalPrevious = millis(); 
+  }
+
   if (millis() - OLEDUpdateIntervalPrevious >= OLEDUpdateInterval) {
-    updateSensorReadings();// get current temperature and humidity reading
     getLocalTime(&timenow, 0);
     strftime(DisplayTimeWeekDay, 10, "%A", &timenow);
     strftime(DisplayTimeHour, 3, "%H", &timenow);
@@ -470,31 +486,23 @@ void WiFiEvent(WiFiEvent_t event) {
 }
 
 void updateSensorReadings() {
-  // 1. Only read every 10 seconds to prevent sensor lock-up
+  // Reading every 10 seconds is still good practice 
   static unsigned long lastRead = 0;
   if (millis() - lastRead < 10000) return; 
   lastRead = millis();
 
-  // 2. Attempt to read
-  float t = am2320.readTemperature();
-  float h = am2320.readHumidity();
+  // Wake up the sensor, read, then go back to sleep to reduce self-heating
+  mcp.wake(); 
+  float t = mcp.readTempC();
+  mcp.shutdown_wake(1); // 1 = shutdown/sleep
 
-  // 3. Check for failure [cite: 106]
-  if (isnan(t) || isnan(h)) {
-    static int errorCounter = 0;
-    errorCounter++;
-    Serial.printf("Sensor Read Failed (%d/5)\n", errorCounter);
-
-    // 4. If it fails 5 times in a row, try to jumpstart the sensor
-    if (errorCounter >= 5) {
-      Serial.println("Attempting I2C Sensor Reset...");
-      am2320.begin(); 
-      errorCounter = 0; // Reset counter to try again
-    }
-    return; 
+  // Check for failure (NaN)
+  if (isnan(t)) {
+    Serial.println("MCP9808 Read Failed");
+    currentTemp = 99; //set temperature to absurd value to flag error
+    return;
   }
 
-  // If successful, update globals and reset error counter
   currentTemp = t;
-  currentHum = h;
+  // Note: currentHum will remain 0 as MCP9808 is temperature only.
 }
