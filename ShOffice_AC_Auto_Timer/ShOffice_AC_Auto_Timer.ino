@@ -8,11 +8,14 @@
 #include "PinDefinitionsAndMore.h"
 #include <IRremote.hpp>
 #include "ac_LG.hpp"
+#include "Adafruit_MCP9808.h"
+
 
 // --- 2. Hardware Objects ---
 AsyncWebServer server(80);
 Aircondition_LG MyLG_Aircondition;
 U8G2_SH1107_SEEED_128X128_F_HW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
+Adafruit_MCP9808 mcp = Adafruit_MCP9808();
 
 // --- 3. Network & Time Constants ---
 const char* ssid = "ShOffice_2_4GHz";
@@ -214,7 +217,18 @@ void setup() {
   TimeIntervalPrevious = millis();
   u8g2.begin();  //initialise OLED Display
   OLEDUpdateIntervalPrevious = millis();
+  AM2320UpdateIntervalPrevious = millis();
 
+  if (!mcp.begin(0x18)) { // Default I2C address is 0x18
+    Serial.println("Could not find MCP9808! Check wiring.");
+  } 
+  else {
+    mcp.setResolution(3); // Sets resolution to 0.0625°C
+    Serial.println("MCP9808 found!");
+  }
+
+  // SET I2C CLOCK TO 100kHz FOR STABILITY
+  Wire.setClock(100000);
 }
 
 void loop() {
@@ -292,6 +306,11 @@ void loop() {
     RunSystemStr = "OFF";
   }
 
+  if (millis() - AM2320UpdateIntervalPrevious >= AM2320UpdateInterval){
+    updateSensorReadings();// get current temperature 
+    AM2320UpdateIntervalPrevious = millis(); 
+  }
+
   if (millis() - OLEDUpdateIntervalPrevious >= OLEDUpdateInterval) {
     getLocalTime(&timenow, 0);
     strftime(DisplayTimeWeekDay, 10, "%A", &timenow);
@@ -330,6 +349,13 @@ void loop() {
     u8g2.setCursor(50, 95);
     u8g2.print(AC_Mode_State);
 
+    u8g2.setFont(u8g2_font_profont22_tf);  // choose a bigger font for time
+    u8g2.drawStr(0, 30, DisplayTimeHour);
+    u8g2.drawStr(22, 30, ":");
+    u8g2.drawStr(31, 30, DisplayTimeMinute);
+    u8g2.drawStr(60, 30, "/");
+    u8g2.setCursor(80, 30);
+    u8g2.print(currentTemp, 1); // Display with 1 decimal place
     u8g2.sendBuffer();
     OLEDUpdateIntervalPrevious = millis();
   }
@@ -456,16 +482,23 @@ void WiFiEvent(WiFiEvent_t event) {
 }
 
 void updateSensorReadings() {
-  // Only read every 5 seconds; AM2320 is slow and hates being rushed
+  // Reading every 10 seconds is still good practice 
   static unsigned long lastRead = 0;
-  if (millis() - lastRead < 5000) return;
+  if (millis() - lastRead < 10000) return; 
   lastRead = millis();
 
-  // The library handles the I2C wake-up pulse automatically
-  currentTemp = am2320.readTemperature();
-  currentHum = am2320.readHumidity();
+  // Wake up the sensor, read, then go back to sleep to reduce self-heating
+  mcp.wake(); 
+  float t = mcp.readTempC();
+  mcp.shutdown_wake(1); // 1 = shutdown/sleep
 
-  if (isnan(currentTemp) || isnan(currentHum)) {
-    Serial.println("AM2320 Error: Check I2C wiring (SDA/SCL)");
+  // Check for failure (NaN)
+  if (isnan(t)) {
+    Serial.println("MCP9808 Read Failed");
+    currentTemp = 99; //set temperature to absurd value to flag error
+    return;
   }
+
+  currentTemp = t;
+  // Note: currentHum will remain 0 as MCP9808 is temperature only.
 }
