@@ -42,6 +42,8 @@ int myParameter = 0;
 String SystemState = "OFF";
 float currentTemp = 0;    // Global to store the reading
 float currentHum = 0;
+int AM2320UpdateIntervalPrevious = 0;
+int AM2320UpdateInterval = 10000;
 
 // --- 5. Parameters & Web Input Storage ---
 char myParameter1[4] = "xx";  // Hour, use default from above to initialise
@@ -89,6 +91,7 @@ String processor(const String& var) {
   if (var == "TEMP") return String(myParameter3);
   if (var == "MODE") return String(myParameter4);
   if (var == "RUN") return String(myParameter5);
+  if (var == "CURRENT_TEMP") return String(currentTemp, 1);
   return String();
 }
 
@@ -109,6 +112,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head><body>
   <h2>AC Configuration</h2>
   <form action="/get">
+    <div style="font-size: 1.5rem; margin-bottom: 20px; color: #007bff;">Current Office Temp: <strong>%CURRENT_TEMP%&deg;C</strong></div>
     <div class="row"><label>Hour Start:</label><input type="text" name="input1" placeholder="%HOUR%"></div>
     <div class="row"><label>Minute Start:</label><input type="text" name="input2" placeholder="%MIN%"></div>
     <div class="row"><label>Temp Setpoint:</label><input type="text" name="input3" placeholder="%TEMP%"></div>
@@ -116,13 +120,30 @@ const char index_html[] PROGMEM = R"rawliteral(
     <div class="row"><label>System Run (1/0):</label><input type="text" name="input5" placeholder="%RUN%"></div>
     <input type="submit" value="Update Settings">
   </form>
-
   <br>
-
   <form action="/trigger">
     <button type="submit" class="trigger-btn">SEND IR COMMANDS NOW</button>
   </form>
   <p><a href="/">Refresh Status</a></p>
+</body></html>)rawliteral";
+
+const char success_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html><head>
+  <title>Settings Updated</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: Arial; text-align: center; margin-top: 50px; }
+    .card { display: inline-block; background: #f2f2f2; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    h2 { color: #4CAF50; }
+    .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
+  </style>
+</head><body>
+  <div class="card">
+    <h2>✔ Settings Updated</h2>
+    <p>Your AC configuration has been saved successfully.</p>
+    <a href="/" class="btn">Return to Dashboard</a>
+  </div>
 </body></html>)rawliteral";
 
 void notFound(AsyncWebServerRequest* request) {
@@ -188,7 +209,7 @@ void setup() {
     }
 
     Serial.println("Settings Updated");
-    request->send(200, "text/html", "Configuration updated.<br><a href=\"/\">Return</a>");
+    request->send_P(200, "text/html", success_html);
   });
 
   // Set the fallback for unhandled routes
