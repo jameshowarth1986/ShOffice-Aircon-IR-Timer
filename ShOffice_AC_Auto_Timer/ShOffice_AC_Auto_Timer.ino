@@ -64,10 +64,6 @@ int IRCommandStep = 0;               // used to enable triggers IR commands and 
 unsigned long OLEDUpdateIntervalPrevious = 0;  //how long since our previous update to the OLED
 const int OLEDUpdateInterval = 500;
 
-//Temperature update interval timer
-unsigned long AM2320UpdateIntervalPrevious = 0;  //how long since our previous update of temperature sensor reading
-const int AM2320UpdateInterval = 10000; //about 10 seconds
-
 //timer interval for checking wifi status
 const long wifiCheckInterval = 10000;  // Check every 10 seconds
 
