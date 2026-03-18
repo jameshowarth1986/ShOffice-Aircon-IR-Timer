@@ -101,13 +101,15 @@ const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
   <title>AC Controller</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8">
   <style>
     body { font-family: Arial; text-align: center; margin-top: 30px; }
     form { display: inline-block; text-align: left; background: #f2f2f2; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
     .row { margin: 10px 0; }
     label { display: inline-block; width: 160px; font-weight: bold; }
-    .trigger-btn { background-color: #ff4c4c; color: white; border: none; padding: 15px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; }
-    input[type="submit"] { width: 100%; height: 30px; }
+    .trigger-btn { background-color: #4CAF50; color: white; border: none; padding: 15px; border-radius: 5px; cursor: pointer; width: 100%%; font-weight: bold; margin-bottom: 10px; }
+    .off-btn { background-color: #ff4c4c; color: white; border: none; padding: 15px; border-radius: 5px; cursor: pointer; width: 100%%; font-weight: bold; }
+    input[type="submit"] { width: 100%%; height: 30px; }
   </style>
 </head><body>
   <h2>AC Configuration</h2>
@@ -121,9 +123,17 @@ const char index_html[] PROGMEM = R"rawliteral(
     <input type="submit" value="Update Settings">
   </form>
   <br>
-  <form action="/trigger">
-    <button type="submit" class="trigger-btn">SEND IR COMMANDS NOW</button>
-  </form>
+  
+  <div style="display: inline-block; width: 300px;">
+    <form action="/trigger" style="background: none; padding: 0; width: 100%%;">
+      <button type="submit" class="trigger-btn">SEND CONFIG SEQUENCE</button>
+    </form>
+    
+    <form action="/off" style="background: none; padding: 0; width: 100%%;">
+      <button type="submit" class="off-btn">TURN AC OFF NOW</button>
+    </form>
+  </div>
+
   <p><a href="/">Refresh Status</a></p>
 </body></html>)rawliteral";
 
@@ -142,6 +152,44 @@ const char success_html[] PROGMEM = R"rawliteral(
   <div class="card">
     <h2>✔ Settings Updated</h2>
     <p>Your AC configuration has been saved successfully.</p>
+    <a href="/" class="btn">Return to Dashboard</a>
+  </div>
+</body></html>)rawliteral";
+
+const char sequence_initiated[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html><head>
+  <title>Settings Updated</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: Arial; text-align: center; margin-top: 50px; }
+    .card { display: inline-block; background: #f2f2f2; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    h2 { color: #4CAF50; }
+    .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
+  </style>
+</head><body>
+  <div class="card">
+    <h2>✔ IR Command Initated</h2>
+    <p>The IR command sequence has been initiated.</p>
+    <a href="/" class="btn">Return to Dashboard</a>
+  </div>
+</body></html>)rawliteral";
+
+const char power_off_cmd_sent[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html><head>
+  <title>Settings Updated</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: Arial; text-align: center; margin-top: 50px; }
+    .card { display: inline-block; background: #f2f2f2; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    h2 { color: #4CAF50; }
+    .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
+  </style>
+</head><body>
+  <div class="card">
+    <h2>✔ Power Off Command Initated</h2>
+    <p>The Air Conditoning unit will now be switched off.</p>
     <a href="/" class="btn">Return to Dashboard</a>
   </div>
 </body></html>)rawliteral";
@@ -177,10 +225,20 @@ void setup() {
       IRCommandStep = 1;
       previousIRMillis = millis();  // Initialize the non-blocking timer
       Serial.println("Manual IR Triggered via Web");
-      request->send(200, "text/html", "IR Sequence Started!<br><a href=\"/\">Return</a>");
+      request->send(200, "text/html", sequence_initiated);
     } else {
       request->send(200, "text/html", "Sequence already in progress.<br><a href=\"/\">Return</a>");
     }
+  });
+
+  //Adding a button for sending the off
+  server.on("/off", HTTP_GET, [](AsyncWebServerRequest* request) {
+    // Send the specific LG OFF command immediately
+    MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_OFF, 0); 
+    Serial.println("Manual IR OFF Triggered via Web");
+    
+    // Redirect back to the success page you already created
+    request->send_P(200, "text/html", power_off_cmd_sent); 
   });
 
   // FIX 2: Update /get to handle multiple parameters
