@@ -6,7 +6,13 @@
 #include <time.h>
 #include <U8g2lib.h>
 #include "PinDefinitionsAndMore.h"
+
+#ifndef INFO
+#define INFO(x)
+#endif
+
 #include <IRremote.hpp>
+
 #include "ac_LG.hpp"
 #include "Adafruit_MCP9808.h"
 
@@ -32,6 +38,8 @@ int AC_Turn_On_Time_Minute = 0;          //default start time minutes i.e. 00 pa
 const int AC_Turn_Off_Time_Hour = 21;    //power off time for AC
 const int AC_Turn_Off_Time_Minute = 00;  //power off time for AC
 bool runSystem = 0;
+// Add this line to track the 7 days (0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat)
+bool activeDays[7] = {true, true, true, true, true, true, true}; 
 bool TimeSyncSuccessBool = false;
 bool AC_State_Previous = 0;
 unsigned long previousWifiCheckMillis = 0;
@@ -92,6 +100,16 @@ String processor(const String& var) {
   if (var == "MODE") return String(myParameter4);
   if (var == "RUN") return String(myParameter5);
   if (var == "CURRENT_TEMP") return String(currentTemp, 1);
+  
+  // Day selection placeholders
+  if (var == "CHK_SUN") return activeDays[0] ? "checked" : "";
+  if (var == "CHK_MON") return activeDays[1] ? "checked" : "";
+  if (var == "CHK_TUE") return activeDays[2] ? "checked" : "";
+  if (var == "CHK_WED") return activeDays[3] ? "checked" : "";
+  if (var == "CHK_THU") return activeDays[4] ? "checked" : "";
+  if (var == "CHK_FRI") return activeDays[5] ? "checked" : "";
+  if (var == "CHK_SAT") return activeDays[6] ? "checked" : "";
+  
   return String();
 }
 
@@ -120,6 +138,20 @@ const char index_html[] PROGMEM = R"rawliteral(
     <div class="row"><label>Temp Setpoint:</label><input type="text" name="input3" placeholder="%TEMP%"></div>
     <div class="row"><label>Mode (h/c):</label><input type="text" name="input4" placeholder="%MODE%"></div>
     <div class="row"><label>System Run (1/0):</label><input type="text" name="input5" placeholder="%RUN%"></div>
+
+    <div class="row" style="text-align: left; margin: 15px 0;">
+      <label>Active Days:</label><br>
+      <div style="display: inline-block; padding-top: 5px;">
+        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d1" value="1" %CHK_MON%> Mon</label>
+        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d2" value="1" %CHK_TUE%> Tue</label>
+        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d3" value="1" %CHK_WED%> Wed</label>
+        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d4" value="1" %CHK_THU%> Thu</label>
+        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d5" value="1" %CHK_FRI%> Fri</label>
+        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d6" value="1" %CHK_SAT%> Sat</label>
+        <label style="width: auto;"><input type="checkbox" name="d0" value="1" %CHK_SUN%> Sun</label>
+      </div>
+    </div>
+
     <input type="submit" value="Update Settings">
   </form>
   <br>
@@ -265,6 +297,18 @@ void setup() {
       strncpy(myParameter5, request->getParam("input5")->value().c_str(), sizeof(myParameter5) - 1);
       myParameter5[sizeof(myParameter5) - 1] = '\0';
     }
+    // Reset all days to false before reading inputs (unchecked boxes aren't sent in the HTTP GET)
+    for(int i = 0; i < 7; i++) {
+      activeDays[i] = false;
+    }
+    // Check which days are present in the request
+    if (request->hasParam("d0")) activeDays[0] = true;
+    if (request->hasParam("d1")) activeDays[1] = true;
+    if (request->hasParam("d2")) activeDays[2] = true;
+    if (request->hasParam("d3")) activeDays[3] = true;
+    if (request->hasParam("d4")) activeDays[4] = true;
+    if (request->hasParam("d5")) activeDays[5] = true;
+    if (request->hasParam("d6")) activeDays[6] = true;
 
     Serial.println("Settings Updated");
     request->send_P(200, "text/html", success_html);
@@ -447,7 +491,7 @@ void loop() {
    * ========================================================================
    */
   // Find the AC Turn-On logic around source 85
-  if (runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Turn_On_Time_Hour && timenow.tm_min == AC_Turn_On_Time_Minute) {
+  if (runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Turn_On_Time_Hour && timenow.tm_min == AC_Turn_On_Time_Minute && activeDays[timenow.tm_wday] == true) {
     // Instead of sending commands immediately, start the sequence
     if (IRCommandStep == 0) {  // Only start if we are idle
       IRCommandStep = 1;
@@ -467,7 +511,7 @@ void loop() {
    * TURN THE SYSTEM OFF
    * ========================================================================
    */
-  if (runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Turn_Off_Time_Hour && timenow.tm_min == AC_Turn_Off_Time_Minute) {
+  if (runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Turn_Off_Time_Hour && timenow.tm_min == AC_Turn_Off_Time_Minute && activeDays[timenow.tm_wday] == true) {
     // send command to turn AC OFF
     MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_OFF, 0);
     AC_State_Previous = 1;  // this helps to stop us spamming commands for an entire minute during switch on
