@@ -92,6 +92,11 @@ String Wifi_State = "unknown";
 String RunSystemStr = "INITIALISED";
 String CurrentState = "INITIALISED";
 
+// Forward declarations
+void updateSensorReadings();
+void printLocalTime();
+void WiFiEvent(WiFiEvent_t event);
+
 // --- 8. WebPage Presentation converter ---
 String processor(const String& var) {
   if (var == "HOUR") return String(myParameter1);
@@ -100,7 +105,15 @@ String processor(const String& var) {
   if (var == "MODE") return String(myParameter4);
   if (var == "RUN") return String(myParameter5);
   if (var == "CURRENT_TEMP") return String(currentTemp, 1);
-  
+
+  // Mode radio state
+  if (var == "MODE_H_CHECKED") return (strncasecmp(myParameter4, "h", 1) == 0) ? "checked" : "";
+  if (var == "MODE_C_CHECKED") return (strncasecmp(myParameter4, "c", 1) == 0) ? "checked" : "";
+
+  // Run radio state
+  if (var == "RUN_1_CHECKED") return (atoi(myParameter5) == 1) ? "checked" : "";
+  if (var == "RUN_0_CHECKED") return (atoi(myParameter5) == 0) ? "checked" : "";
+
   // Day selection placeholders
   if (var == "CHK_SUN") return activeDays[0] ? "checked" : "";
   if (var == "CHK_MON") return activeDays[1] ? "checked" : "";
@@ -109,76 +122,182 @@ String processor(const String& var) {
   if (var == "CHK_THU") return activeDays[4] ? "checked" : "";
   if (var == "CHK_FRI") return activeDays[5] ? "checked" : "";
   if (var == "CHK_SAT") return activeDays[6] ? "checked" : "";
-  
+
   return String();
 }
 
-//web page that can handle multiple inputs at the same time
-// Change the variable name to index_html_template to avoid confusion
+// Light Mode UI Template for ESPAsyncWebServer
 const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE HTML><html><head>
-  <title>AC Controller</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!DOCTYPE html>
+<html lang="en">
+<head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AC Controller</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    body { font-family: Arial; text-align: center; margin-top: 30px; }
-    form { display: inline-block; text-align: left; background: #f2f2f2; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
-    .row { margin: 10px 0; }
-    label { display: inline-block; width: 160px; font-weight: bold; }
-    .trigger-btn { background-color: #4CAF50; color: white; border: none; padding: 15px; border-radius: 5px; cursor: pointer; width: 100%%; font-weight: bold; margin-bottom: 10px; }
-    .off-btn { background-color: #ff4c4c; color: white; border: none; padding: 15px; border-radius: 5px; cursor: pointer; width: 100%%; font-weight: bold; }
-    input[type="submit"] { width: 100%%; height: 30px; }
+    :root {
+      --bg: #F4F6F9;
+      --card-bg: #FFFFFF;
+      --text-main: #1E293B;
+      --text-muted: #64748B;
+      --border: #E2E8F0;
+      --accent-cool: #0284C7;
+      --accent-cool-light: #E0F2FE;
+      --accent-heat: #EA580C;
+      --accent-heat-light: #FFEDD5;
+      --accent-green: #16A34A;
+      --accent-green-light: #DCFCE7;
+      --danger: #EF4444;
+      --shadow-sm: 0 2px 4px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.03);
+      --shadow-md: 0 10px 25px -5px rgba(0,0,0,0.05), 0 8px 10px -6px rgba(0,0,0,0.01);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
+    body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 20px 12px; }
+    .container { width: 100%%; max-width: 440px; margin: 0 auto; }
+    .card { background: var(--card-bg); border-radius: 24px; padding: 24px; box-shadow: var(--shadow-md); border: 1px solid var(--border); margin-bottom: 16px; }
+    .header { text-align: center; margin-bottom: 24px; }
+    .header h1 { font-size: 1.5rem; font-weight: 800; color: var(--text-main); }
+    .temp-card { background: linear-gradient(135deg, #F8FAFC 0%%, #EFF6FF 100%%); border: 1px solid #DBEAFE; border-radius: 20px; padding: 20px; text-align: center; position: relative; margin-bottom: 24px; }
+    .temp-label { font-size: 0.85rem; font-weight: 700; color: var(--accent-cool); text-transform: uppercase; letter-spacing: 0.5px; }
+    .temp-val { font-size: 3.2rem; font-weight: 800; color: var(--text-main); margin: 6px 0; display: flex; align-items: center; justify-content: center; }
+    .form-group { margin-bottom: 20px; }
+    .form-label { display: block; font-size: 0.85rem; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .segmented-control { display: flex; background: #F1F5F9; padding: 4px; border-radius: 14px; gap: 4px; }
+    .segmented-control input[type="radio"] { display: none; }
+    .segmented-control label { flex: 1; text-align: center; padding: 10px; font-size: 0.9rem; font-weight: 700; border-radius: 10px; cursor: pointer; color: var(--text-muted); transition: all 0.2s ease; }
+    .segmented-control input[type="radio"]:checked + label { background: #FFFFFF; color: var(--text-main); box-shadow: var(--shadow-sm); }
+    #mode-h:checked + label { color: var(--accent-heat); }
+    #mode-c:checked + label { color: var(--accent-cool); }
+    .input-box { width: 100%%; background: #F8FAFC; border: 1.5px solid var(--border); border-radius: 12px; padding: 12px 16px; font-size: 1rem; font-weight: 600; color: var(--text-main); outline: none; transition: border-color 0.2s; }
+    .input-box:focus { border-color: var(--accent-cool); background: #FFFFFF; }
+    .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .days-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .day-pill input { display: none; }
+    .day-pill label { display: flex; align-items: center; justify-content: center; height: 38px; border-radius: 10px; background: #F1F5F9; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; transition: all 0.2s ease; }
+    .day-pill input:checked + label { background: var(--text-main); color: #FFFFFF; }
+    .btn { width: 100%%; padding: 16px; border: none; border-radius: 14px; font-size: 1rem; font-weight: 700; cursor: pointer; transition: transform 0.1s ease, box-shadow 0.2s ease; display: block; text-align: center; text-decoration: none; box-shadow: var(--shadow-sm); }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: var(--text-main); color: #FFFFFF; }
+    .btn-success { background: var(--accent-green); color: #FFFFFF; margin-bottom: 12px; }
+    .btn-danger { background: #FEE2E2; color: var(--danger); }
+    .footer-link { text-align: center; margin-top: 16px; }
+    .footer-link a { color: var(--text-muted); font-size: 0.9rem; font-weight: 600; text-decoration: none; }
   </style>
-</head><body>
-  <h2>AC Configuration</h2>
-  <form action="/get">
-    <div style="font-size: 1.5rem; margin-bottom: 20px; color: #007bff;">Current Office Temp: <strong>%CURRENT_TEMP%&deg;C</strong></div>
-    <div class="row"><label>Hour Start:</label><input type="text" name="input1" placeholder="%HOUR%"></div>
-    <div class="row"><label>Minute Start:</label><input type="text" name="input2" placeholder="%MIN%"></div>
-    <div class="row"><label>Temp Setpoint:</label><input type="text" name="input3" placeholder="%TEMP%"></div>
-    <div class="row"><label>Mode (h/c):</label><input type="text" name="input4" placeholder="%MODE%"></div>
-    <div class="row"><label>System Run (1/0):</label><input type="text" name="input5" placeholder="%RUN%"></div>
-
-    <div class="row" style="text-align: left; margin: 15px 0;">
-      <label>Active Days:</label><br>
-      <div style="display: inline-block; padding-top: 5px;">
-        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d1" value="1" %CHK_MON%> Mon</label>
-        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d2" value="1" %CHK_TUE%> Tue</label>
-        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d3" value="1" %CHK_WED%> Wed</label>
-        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d4" value="1" %CHK_THU%> Thu</label>
-        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d5" value="1" %CHK_FRI%> Fri</label>
-        <label style="width: auto; margin-right: 8px;"><input type="checkbox" name="d6" value="1" %CHK_SAT%> Sat</label>
-        <label style="width: auto;"><input type="checkbox" name="d0" value="1" %CHK_SUN%> Sun</label>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <h1>AC Configuration</h1>
       </div>
+
+      <div class="temp-card">
+        <div class="temp-label">Current Office Temp</div>
+        <div class="temp-val">%CURRENT_TEMP%&deg;C</div>
+      </div>
+
+      <form action="/get" method="GET">
+        <div class="form-group">
+          <label class="form-label">System Mode</label>
+          <div class="segmented-control">
+            <input type="radio" id="mode-h" name="input4" value="h" %MODE_H_CHECKED%>
+            <label for="mode-h">Heat (h)</label>
+            <input type="radio" id="mode-c" name="input4" value="c" %MODE_C_CHECKED%>
+            <label for="mode-c">Cool (c)</label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">System Power</label>
+          <div class="segmented-control">
+            <input type="radio" id="run-1" name="input5" value="1" %RUN_1_CHECKED%>
+            <label for="run-1">On (1)</label>
+            <input type="radio" id="run-0" name="input5" value="0" %RUN_0_CHECKED%>
+            <label for="run-0">Off (0)</label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Target Setpoint (&deg;C)</label>
+          <input type="number" class="input-box" name="input3" value="%TEMP%" placeholder="%TEMP%" min="18" max="29">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Schedule Start Time</label>
+          <div class="time-grid">
+            <div>
+              <input type="number" class="input-box" name="input1" value="%HOUR%" placeholder="Hour (%HOUR%)" min="0" max="23">
+            </div>
+            <div>
+              <input type="number" class="input-box" name="input2" value="%MIN%" placeholder="Min (%MIN%)" min="0" max="59">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Active Days</label>
+          <div class="days-grid">
+            <div class="day-pill">
+              <input type="checkbox" id="d1" name="d1" value="1" %CHK_MON%>
+              <label for="d1">M</label>
+            </div>
+            <div class="day-pill">
+              <input type="checkbox" id="d2" name="d2" value="1" %CHK_TUE%>
+              <label for="d2">T</label>
+            </div>
+            <div class="day-pill">
+              <input type="checkbox" id="d3" name="d3" value="1" %CHK_WED%>
+              <label for="d3">W</label>
+            </div>
+            <div class="day-pill">
+              <input type="checkbox" id="d4" name="d4" value="1" %CHK_THU%>
+              <label for="d4">T</label>
+            </div>
+            <div class="day-pill">
+              <input type="checkbox" id="d5" name="d5" value="1" %CHK_FRI%>
+              <label for="d5">F</label>
+            </div>
+            <div class="day-pill">
+              <input type="checkbox" id="d6" name="d6" value="1" %CHK_SAT%>
+              <label for="d6">S</label>
+            </div>
+            <div class="day-pill">
+              <input type="checkbox" id="d0" name="d0" value="1" %CHK_SUN%>
+              <label for="d0">S</label>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Update Settings</button>
+      </form>
     </div>
 
-    <input type="submit" value="Update Settings">
-  </form>
-  <br>
-  
-  <div style="display: inline-block; width: 300px;">
-    <form action="/trigger" style="background: none; padding: 0; width: 100%%;">
-      <button type="submit" class="trigger-btn">SEND CONFIG SEQUENCE</button>
-    </form>
-    
-    <form action="/off" style="background: none; padding: 0; width: 100%%;">
-      <button type="submit" class="off-btn">TURN AC OFF NOW</button>
-    </form>
+    <div class="card">
+      <a href="/trigger" class="btn btn-success">SEND CONFIG SEQUENCE</a>
+      <a href="/off" class="btn btn-danger">TURN AC OFF NOW</a>
+      <div class="footer-link">
+        <a href="/">Refresh Status</a>
+      </div>
+    </div>
   </div>
-
-  <p><a href="/">Refresh Status</a></p>
-</body></html>)rawliteral";
+</body>
+</html>
+)rawliteral";
 
 const char success_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
   <title>Settings Updated</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: Arial; text-align: center; margin-top: 50px; }
-    .card { display: inline-block; background: #f2f2f2; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-    h2 { color: #4CAF50; }
-    .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
+    .card { display: inline-block; background: #ffffff; padding: 30px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    h2 { color: #16A34A; margin-bottom: 10px; }
+    .btn { background-color: #1E293B; color: white; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
   </style>
 </head><body>
   <div class="card">
@@ -190,18 +309,19 @@ const char success_html[] PROGMEM = R"rawliteral(
 
 const char sequence_initiated[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
-  <title>Settings Updated</title>
+  <title>Sequence Initiated</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: Arial; text-align: center; margin-top: 50px; }
-    .card { display: inline-block; background: #f2f2f2; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-    h2 { color: #4CAF50; }
-    .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
+    .card { display: inline-block; background: #ffffff; padding: 30px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    h2 { color: #16A34A; margin-bottom: 10px; }
+    .btn { background-color: #1E293B; color: white; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
   </style>
 </head><body>
   <div class="card">
-    <h2>✔ IR Command Initated</h2>
+    <h2>✔ IR Command Initiated</h2>
     <p>The IR command sequence has been initiated.</p>
     <a href="/" class="btn">Return to Dashboard</a>
   </div>
@@ -209,19 +329,20 @@ const char sequence_initiated[] PROGMEM = R"rawliteral(
 
 const char power_off_cmd_sent[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
-  <title>Settings Updated</title>
+  <title>Power Off Sent</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: Arial; text-align: center; margin-top: 50px; }
-    .card { display: inline-block; background: #f2f2f2; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-    h2 { color: #4CAF50; }
-    .btn { background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
+    .card { display: inline-block; background: #ffffff; padding: 30px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    h2 { color: #EF4444; margin-bottom: 10px; }
+    .btn { background-color: #1E293B; color: white; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
   </style>
 </head><body>
   <div class="card">
-    <h2>✔ Power Off Command Initated</h2>
-    <p>The Air Conditoning unit will now be switched off.</p>
+    <h2>✔ Power Off Command Initiated</h2>
+    <p>The Air Conditioning unit will now be switched off.</p>
     <a href="/" class="btn">Return to Dashboard</a>
   </div>
 </body></html>)rawliteral";
@@ -243,9 +364,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   Serial.print("Connecting to ");
   Serial.println(ssid);
-  // This starts the connection process, but does NOT wait.
-  // The ARDUINO_EVENT_WIFI_STA_GOT_IP event will handle the rest.
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);  // Lower power often leads to a more stable connection on C3
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);  
   WiFi.begin(ssid, password);
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -263,20 +382,15 @@ void setup() {
     }
   });
 
-  //Adding a button for sending the off
+  // Button for sending off command
   server.on("/off", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // Send the specific LG OFF command immediately
     MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_OFF, 0); 
     Serial.println("Manual IR OFF Triggered via Web");
-    
-    // Redirect back to the success page you already created
     request->send_P(200, "text/html", power_off_cmd_sent); 
   });
 
-  // FIX 2: Update /get to handle multiple parameters
+  // Handle incoming settings form submit
   server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // Check each parameter independently (no 'else if')
-    // Only update if the parameter exists AND has a value (length > 0)
     if (request->hasParam("input1") && request->getParam("input1")->value().length() > 0) {
       strncpy(myParameter1, request->getParam("input1")->value().c_str(), sizeof(myParameter1) - 1);
       myParameter1[sizeof(myParameter1) - 1] = '\0';
@@ -297,11 +411,13 @@ void setup() {
       strncpy(myParameter5, request->getParam("input5")->value().c_str(), sizeof(myParameter5) - 1);
       myParameter5[sizeof(myParameter5) - 1] = '\0';
     }
-    // Reset all days to false before reading inputs (unchecked boxes aren't sent in the HTTP GET)
+    
+    // Reset days
     for(int i = 0; i < 7; i++) {
       activeDays[i] = false;
     }
-    // Check which days are present in the request
+    
+    // Read days
     if (request->hasParam("d0")) activeDays[0] = true;
     if (request->hasParam("d1")) activeDays[1] = true;
     if (request->hasParam("d2")) activeDays[2] = true;
@@ -314,123 +430,83 @@ void setup() {
     request->send_P(200, "text/html", success_html);
   });
 
-  // Set the fallback for unhandled routes
   server.onNotFound(notFound);
-
-  // Start the server ONLY ONCE
   server.begin();
 
-#if defined(__AVR_ATmega32U4__) || defined(SERIAL_PORT_USBVIRTUAL) || defined(SERIAL_USB) /*stm32duino*/ || defined(USBCON) /*STM32_stm32*/ \
+#if defined(__AVR_ATmega32U4__) || defined(SERIAL_PORT_USBVIRTUAL) || defined(SERIAL_USB) || defined(USBCON) \
   || defined(SERIALUSB_PID) || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_attiny3217)
-  delay(4000);  // To be able to connect Serial monitor after reset or power up and before first print out. Do not wait for an attached Serial Monitor!
+  delay(4000); 
 #endif
-  // Just to know which program is running on my Arduino
+
   Serial.println(F("START " __FILE__ " from " __DATE__ "\r\nUsing library version " VERSION_IRREMOTE));
   Serial.println(F("Send IR signals at pin " STR(IR_SEND_PIN)));
 
-  /*
-     * The IR library setup. That's all!
-     */
-  IrSender.begin();  // Start with IR_SEND_PIN -which is defined in PinDefinitionsAndMore.h- as send pin and enable feedback LED at default feedback LED pin
+  IrSender.begin();  
 
   Serial.println();
   MyLG_Aircondition.setType(LG_IS_WALL_TYPE);
   MyLG_Aircondition.printMenu(&Serial);
 
   TimeIntervalPrevious = millis();
-  u8g2.begin();  //initialise OLED Display
+  u8g2.begin();  
   OLEDUpdateIntervalPrevious = millis();
   AM2320UpdateIntervalPrevious = millis();
 
-  if (!mcp.begin(0x18)) { // Default I2C address is 0x18
+  if (!mcp.begin(0x18)) { 
     Serial.println("Could not find MCP9808! Check wiring.");
   } 
   else {
-    mcp.setResolution(3); // Sets resolution to 0.0625°C
+    mcp.setResolution(3); 
     Serial.println("MCP9808 found!");
   }
 
-  // SET I2C CLOCK TO 100kHz FOR STABILITY
   Wire.setClock(100000);
 }
 
 void loop() {
-
   unsigned long currentMillis = millis();
-  
 
-  // --- NEW RECONNECTION LOGIC ---
-  // If WiFi is down AND 10 seconds have passed, try to reconnect
   if (WiFi.status() != WL_CONNECTED && (currentMillis - previousWifiCheckMillis >= wifiCheckInterval)) {
     Serial.println("Reconnecting to WiFi...");
     WiFi.disconnect();
-    WiFi.reconnect();  // or WiFi.begin(ssid, password);
+    WiFi.reconnect();  
     previousWifiCheckMillis = currentMillis;
     Wifi_State = "reconnecting";
   }
-  // ------------------------------
 
-  // --- Add Periodic Time Synchronization Check ---
   if (WiFi.status() == WL_CONNECTED && (millis() - TimeIntervalPrevious >= TimeSyncInterval)) {
-    // Re-run configuration and sync the time
-    //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     configTzTime(TZ_INFO, ntpServer);
-    printLocalTime();  // This is where the actual time sync is requested
-
+    printLocalTime();  
     TimeIntervalPrevious = millis();
   }
 
-
-  if (atoi(myParameter1) != 0 || (myParameter1[0] == '0' && myParameter1[1] == '\0')) {  // Check if it's non-zero or just "0"
-    //If the value is non-zero then it means i have entered a new value
+  if (atoi(myParameter1) != 0 || (myParameter1[0] == '0' && myParameter1[1] == '\0')) {  
     AC_Turn_On_Time_Hour = atoi(myParameter1);
     AC_Turn_On_Time_Minute = atoi(myParameter2);
   }
 
-  // Check temperature bounds
   if (atoi(myParameter3) >= 18 && atoi(myParameter3) <= 29) {
     TargetTemperature = atoi(myParameter3);
   }
 
-  // Compare mode (case-insensitive for 'h')
-  // strncasecmp(s1, s2, n) returns 0 if the first n characters are equal (case-insensitive)
   if (strncasecmp(myParameter4, "h", 1) == 0) {
-    //we have set it to heat mode
     myModeParameter = AC_MODE_HEATING - '0';
-    // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
     AC_Mode_State = "Heat";
   }
-  // Compare mode (case-insensitive for 'c')
   else if (strncasecmp(myParameter4, "c", 1) == 0) {
-    //we have set it to cool mode
     myModeParameter = AC_MODE_COOLING - '0';
-    // process the heating commands so its only the bits it needs, i dont know what this does ¯\_(ツ)_/¯
     AC_Mode_State = "Cool";
   } else {
-    //we have an error, do nothing
     AC_Mode_State = "not set";
   }
 
-  // Check runSystem (1)
-  if (atoi(myParameter5) == 1) {
-    runSystem = HIGH;
-  }
+  if (atoi(myParameter5) == 1) runSystem = HIGH;
+  if (atoi(myParameter5) == 0) runSystem = LOW;
 
-  // Check runSystem (0)
-  if (atoi(myParameter5) == 0) {
-    runSystem = LOW;
-  }
-
-
-  if (runSystem == HIGH) {
-    RunSystemStr = "RUN";
-  }
-  if (runSystem == LOW) {
-    RunSystemStr = "OFF";
-  }
+  RunSystemStr = (runSystem == HIGH) ? "RUN" : "OFF";
 
   if (millis() - AM2320UpdateIntervalPrevious >= AM2320UpdateInterval){
-    updateSensorReadings();// get current temperature 
+    updateSensorReadings();
     AM2320UpdateIntervalPrevious = millis(); 
   }
 
@@ -444,15 +520,13 @@ void loop() {
 
     u8g2.clearBuffer();
     u8g2.enableUTF8Print();
-    u8g2.setFont(u8g2_font_smart_patrol_nbp_tf);  // choose a small font
-    //draw element: x_pos, y_pos, variable
-    u8g2.drawStr(20, 10, DisplayTimeWeekDay);  //write out the day of the week
-    //Wifi_State and IP Address
+    u8g2.setFont(u8g2_font_smart_patrol_nbp_tf);  
+    u8g2.drawStr(20, 10, DisplayTimeWeekDay);  
+    
     u8g2.setCursor(0, 110);
     u8g2.print(Wifi_State);
     u8g2.setCursor(0, 125);
     u8g2.print(WiFi.localIP());
-
 
     u8g2.drawStr(0, 50, "On Time");
     u8g2.setCursor(70, 50);
@@ -472,91 +546,72 @@ void loop() {
     u8g2.setCursor(50, 95);
     u8g2.print(AC_Mode_State);
 
-    u8g2.setFont(u8g2_font_profont22_tf);  // choose a bigger font for time
+    u8g2.setFont(u8g2_font_profont22_tf);  
     u8g2.drawStr(0, 30, DisplayTimeHour);
     u8g2.drawStr(22, 30, ":");
     u8g2.drawStr(31, 30, DisplayTimeMinute);
     u8g2.drawStr(60, 30, "/");
     u8g2.setCursor(80, 30);
-    u8g2.print(currentTemp, 1); // Display with 1 decimal place
+    u8g2.print(currentTemp, 1); 
     u8g2.sendBuffer();
     OLEDUpdateIntervalPrevious = millis();
   }
 
-
-
-  /*
-   * ========================================================================
-   * TURN ON THE SYSTEM, WITH HIGH FAN SPEED TO WARM UP THE ROOM QUICKLY
-   * ========================================================================
-   */
-  // Find the AC Turn-On logic around source 85
+  // --- AC TURN ON LOGIC ---
   if (runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Turn_On_Time_Hour && timenow.tm_min == AC_Turn_On_Time_Minute && activeDays[timenow.tm_wday] == true) {
-    // Instead of sending commands immediately, start the sequence
-    if (IRCommandStep == 0) {  // Only start if we are idle
+    if (IRCommandStep == 0) {  
       IRCommandStep = 1;
-      previousIRMillis = millis();  // Initialize the timer
-      AC_State_Previous = 1;        // Block re-triggering for this minute
+      previousIRMillis = millis();  
+      AC_State_Previous = 1;        
     }
     SystemState = "HIGH";
   }
-  //After a period of time we need ot clear AC_State_Previous so it can run again the next day. Propose to link this to a time.
+
   if (AC_State_Previous == 1 && timenow.tm_hour == AC_Turn_On_Time_Hour && timenow.tm_min == (AC_Turn_On_Time_Minute + 1)) {
-    //After a delay, we reset AC_State_Previous
-    AC_State_Previous = 0;  //reset previous state to zero.
+    AC_State_Previous = 0;  
   }
 
-  /*
-   * ========================================================================
-   * TURN THE SYSTEM OFF
-   * ========================================================================
-   */
+  // --- AC TURN OFF LOGIC ---
   if (runSystem == HIGH && AC_State_Previous == 0 && timenow.tm_hour == AC_Turn_Off_Time_Hour && timenow.tm_min == AC_Turn_Off_Time_Minute && activeDays[timenow.tm_wday] == true) {
-    // send command to turn AC OFF
     MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_OFF, 0);
-    AC_State_Previous = 1;  // this helps to stop us spamming commands for an entire minute during switch on
+    AC_State_Previous = 1;  
     SystemState = "OFF";
   }
-  //After a period of time we need ot clear AC_State_Previous so it can run again the next day. Propose to link this to a time.
+
   if (AC_State_Previous == 1 && timenow.tm_hour == AC_Turn_Off_Time_Hour && timenow.tm_min == (AC_Turn_Off_Time_Minute + 1)) {
-    AC_State_Previous = 0;  //reset previous state to zero.
+    AC_State_Previous = 0;  
   }
 
   // --- Non-Blocking IR Transmission Sequence ---
   if (IRCommandStep > 0 && (millis() - previousIRMillis >= IRInterval)) {
-
-    // Check which command to send
     switch (IRCommandStep) {
       case 1:
         Serial.println("IR Step 1: Sending ON");
         MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_ON, 0);
-        IRCommandStep = 2;  // Move to the next step
+        IRCommandStep = 2;  
         break;
 
       case 2:
         Serial.println("IR Step 2: Sending MODE");
-        MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_MODE, myModeParameter);  // set the AC mode
-        IRCommandStep = 3;                                                            // Move to the next step
+        MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_MODE, myModeParameter);  
+        IRCommandStep = 3;                                                            
         break;
 
       case 3:
         Serial.println("IR Step 3: Sending TEMPERATURE");
-        MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_TEMPERATURE, TargetTemperature);  // set the AC temperature
-        IRCommandStep = 4;                                                                     // Move to the final step
+        MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_TEMPERATURE, TargetTemperature);  
+        IRCommandStep = 4;                                                                     
         break;
 
       case 4:
         Serial.println("IR Sequence Complete.");
-        // All commands sent. Reset the sequence.
         IRCommandStep = 0;
         break;
     }
 
-    previousIRMillis = millis();  // Reset the timer for the next step
+    previousIRMillis = millis();  
   }
-  // --- End Non-Blocking IR Transmission Sequence ---
 }
-
 
 void printLocalTime() {
   struct tm timeinfo;
@@ -585,16 +640,12 @@ void WiFiEvent(WiFiEvent_t event) {
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       Serial.println("WiFi lost connection...");
-      // *** CRITICAL FIX HERE *** // We REMOVED WiFi.begin() from here.
-      // We let the main loop() handle the reconnection every 10 seconds.
       TimeSyncSuccessBool = false;
       Wifi_State = "disconnected";
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       Serial.print("IP Address: ");
       Serial.println(WiFi.localIP());
-      // Re-initialize and get the time after a successful connection
-      //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); //replacing with below
       configTzTime(TZ_INFO, ntpServer);
       printLocalTime();
       Wifi_State = "GOT IP";
@@ -605,23 +656,19 @@ void WiFiEvent(WiFiEvent_t event) {
 }
 
 void updateSensorReadings() {
-  // Reading every 10 seconds is still good practice 
   static unsigned long lastRead = 0;
   if (millis() - lastRead < 10000) return; 
   lastRead = millis();
 
-  // Wake up the sensor, read, then go back to sleep to reduce self-heating
   mcp.wake(); 
   float t = mcp.readTempC();
-  mcp.shutdown_wake(1); // 1 = shutdown/sleep
+  mcp.shutdown_wake(1); 
 
-  // Check for failure (NaN)
   if (isnan(t)) {
     Serial.println("MCP9808 Read Failed");
-    currentTemp = 99; //set temperature to absurd value to flag error
+    currentTemp = 99; 
     return;
   }
 
   currentTemp = t;
-  // Note: currentHum will remain 0 as MCP9808 is temperature only.
 }
