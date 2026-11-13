@@ -38,7 +38,6 @@ int AC_Turn_On_Time_Minute = 0;          //default start time minutes i.e. 00 pa
 const int AC_Turn_Off_Time_Hour = 21;    //power off time for AC
 const int AC_Turn_Off_Time_Minute = 00;  //power off time for AC
 bool runSystem = 0;
-// Add this line to track the 7 days (0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat)
 bool activeDays[7] = {true, true, true, true, true, true, true}; 
 bool TimeSyncSuccessBool = false;
 bool AC_State_Previous = 0;
@@ -53,29 +52,39 @@ float currentHum = 0;
 int AM2320UpdateIntervalPrevious = 0;
 int AM2320UpdateInterval = 10000;
 
+// --- 4b. 24-Hour Temperature History Buffer (96 points = 24h @ 15-min intervals) ---
+//#define USE_DUMMY_HISTORY  // <--- COMMENT OUT THIS LINE TO DISABLE DUMMY DATA
+
+const int HISTORY_SIZE = 96;
+struct TempRecord {
+  char timeStr[6]; // "HH:MM"
+  float temp;
+};
+TempRecord tempHistory[HISTORY_SIZE];
+int historyHead = 0;          // Points to next write index
+int historyCount = 0;         // Number of valid records stored (0 to 96)
+int lastLoggedMinute = -1;    // Prevents duplicate logging within the same minute
+
 // --- 5. Parameters & Web Input Storage ---
-char myParameter1[4] = "xx";  // Hour, use default from above to initialise
-char myParameter2[4] = "xx";  // Minute, use default from above to initialise
-char myParameter3[4] = "22";  // Temp, use default from above to initialise
-char myParameter4[4] = "xx";  // Mode, set to xx to show it has not been initialised
-char myParameter5[4] = "xx";  // Run, set to xx to show it has not been initialised
+char myParameter1[4] = "xx";  // Hour
+char myParameter2[4] = "xx";  // Minute
+char myParameter3[4] = "22";  // Temp
+char myParameter4[4] = "xx";  // Mode
+char myParameter5[4] = "xx";  // Run
 
 // --- 6. Timing & IR Sequence ---
-struct tm timenow;                                  //time structure for getting network time and setting time within the code
-unsigned long TimeIntervalPrevious = 0;             //used for periodic time sync with the network ntp
+struct tm timenow;                                  
+unsigned long TimeIntervalPrevious = 0;             
 const int TimeSyncInterval = (1000 * 60 * 60 * 6);  // 6 Hours
 
-//IR Command timing and intervals
-unsigned long previousIRMillis = 0;  // Time since previous IR commands was sent
-const long IRInterval = 2000;        // interval between sending successive IR commands
-int IRCommandStep = 0;               // used to enable triggers IR commands and know if we are currently sending them
+unsigned long previousIRMillis = 0;  
+const long IRInterval = 2000;        
+int IRCommandStep = 0;               
 
-//OLED interval timer
-unsigned long OLEDUpdateIntervalPrevious = 0;  //how long since our previous update to the OLED
+unsigned long OLEDUpdateIntervalPrevious = 0;  
 const int OLEDUpdateInterval = 500;
 
-//timer interval for checking wifi status
-const long wifiCheckInterval = 10000;  // Check every 10 seconds
+const long wifiCheckInterval = 10000;  
 
 
 // --- 7. OLED Variables ---
@@ -96,6 +105,7 @@ String CurrentState = "INITIALISED";
 void updateSensorReadings();
 void printLocalTime();
 void WiFiEvent(WiFiEvent_t event);
+void logTemperatureHistory();
 
 // --- 8. WebPage Presentation converter ---
 String processor(const String& var) {
@@ -126,7 +136,7 @@ String processor(const String& var) {
   return String();
 }
 
-// Light Mode UI Template for ESPAsyncWebServer
+// Main Dashboard HTML (Light Mode)
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
@@ -134,9 +144,6 @@ const char index_html[] PROGMEM = R"rawliteral(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AC Controller</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #F4F6F9;
@@ -145,16 +152,13 @@ const char index_html[] PROGMEM = R"rawliteral(
       --text-muted: #64748B;
       --border: #E2E8F0;
       --accent-cool: #0284C7;
-      --accent-cool-light: #E0F2FE;
       --accent-heat: #EA580C;
-      --accent-heat-light: #FFEDD5;
       --accent-green: #16A34A;
-      --accent-green-light: #DCFCE7;
       --danger: #EF4444;
       --shadow-sm: 0 2px 4px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.03);
       --shadow-md: 0 10px 25px -5px rgba(0,0,0,0.05), 0 8px 10px -6px rgba(0,0,0,0.01);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 20px 12px; }
     .container { width: 100%%; max-width: 440px; margin: 0 auto; }
     .card { background: var(--card-bg); border-radius: 24px; padding: 24px; box-shadow: var(--shadow-md); border: 1px solid var(--border); margin-bottom: 16px; }
@@ -183,8 +187,9 @@ const char index_html[] PROGMEM = R"rawliteral(
     .btn-primary { background: var(--text-main); color: #FFFFFF; }
     .btn-success { background: var(--accent-green); color: #FFFFFF; margin-bottom: 12px; }
     .btn-danger { background: #FEE2E2; color: var(--danger); }
-    .footer-link { text-align: center; margin-top: 16px; }
-    .footer-link a { color: var(--text-muted); font-size: 0.9rem; font-weight: 600; text-decoration: none; }
+    .footer-links { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+    .footer-links a { color: var(--accent-cool); font-size: 0.9rem; font-weight: 700; text-decoration: none; }
+    .footer-links a.muted { color: var(--text-muted); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -278,8 +283,9 @@ const char index_html[] PROGMEM = R"rawliteral(
     <div class="card">
       <a href="/trigger" class="btn btn-success">SEND CONFIG SEQUENCE</a>
       <a href="/off" class="btn btn-danger">TURN AC OFF NOW</a>
-      <div class="footer-link">
-        <a href="/">Refresh Status</a>
+      <div class="footer-links">
+        <a href="/history">24h Temp History &rarr;</a>
+        <a href="/" class="muted">Refresh Status</a>
       </div>
     </div>
   </div>
@@ -287,14 +293,402 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
+// Interactive Temperature History Page (Chart.js + Offline Table Fallback)
+// Interactive Temperature History Page (Chart.js + Offline Table Fallback)
+const char history_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>24h Temperature History</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #F4F6F9;
+      --card-bg: #FFFFFF;
+      --text-main: #1E293B;
+      --text-muted: #64748B;
+      --border: #E2E8F0;
+      --accent: #0284C7;
+      --shadow-md: 0 10px 25px -5px rgba(0,0,0,0.05), 0 8px 10px -6px rgba(0,0,0,0.01);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      min-height: 100vh;
+      padding: 16px 12px;
+    }
+    .container {
+      width: 100%%;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    .card {
+      background: var(--card-bg);
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: var(--shadow-md);
+      border: 1px solid var(--border);
+    }
+    .header { margin-bottom: 14px; }
+    .header h1 { font-size: 1.3rem; font-weight: 800; }
+    .subtitle { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+    .legend-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+      font-size: 0.76rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .legend-item { display: flex; align-items: center; gap: 5px; }
+    .dot-temp { width: 10px; height: 10px; border-radius: 50%%; background: #0284C7; }
+    .line-target { width: 14px; height: 0; border-top: 2px dashed #EA580C; }
+    .line-start { width: 0; height: 12px; border-left: 2px dashed #16A34A; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .stat-box {
+      background: #F8FAFC;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 6px;
+      text-align: center;
+    }
+    .stat-label {
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .stat-val {
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: var(--text-main);
+      margin-top: 3px;
+    }
+    .chart-box {
+      position: relative;
+      width: 100%%;
+      height: 270px;
+      background: #F8FAFC;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 10px 8px 6px 4px;
+    }
+    .empty-msg {
+      height: 100%%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-align: center;
+      padding: 20px;
+      line-height: 1.4;
+    }
+    .offline-banner {
+      background: #FEF3C7;
+      color: #92400E;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 8px 12px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    .table-wrap {
+      max-height: 240px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #FFFFFF;
+    }
+    table { width: 100%%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: #F1F5F9; font-weight: 700; position: sticky; top: 0; }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .btn {
+      padding: 13px 10px;
+      border: none;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-primary { background: var(--text-main); color: #FFFFFF; }
+    .btn-secondary { background: #E2E8F0; color: var(--text-main); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <h1>Temperature History</h1>
+        <div class="subtitle">Tap or drag across the graph for exact readings</div>
+      </div>
+
+      <div class="legend-row">
+        <div class="legend-item"><span class="dot-temp"></span> Measured</div>
+        <div class="legend-item"><span class="line-target"></span> Target (<span id="leg-target">--</span>)</div>
+        <div class="legend-item" id="leg-start-wrap" style="display:none;"><span class="line-start"></span> Start (<span id="leg-start">--</span>)</div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-label">Current</div>
+          <div class="stat-val" id="stat-curr">--</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">24h Low</div>
+          <div class="stat-val" id="stat-min">--</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">24h High</div>
+          <div class="stat-val" id="stat-max">--</div>
+        </div>
+      </div>
+
+      <div class="chart-box" id="chartContainer">
+        <canvas id="tempChart"></canvas>
+      </div>
+
+      <div class="actions">
+        <a href="/" class="btn btn-primary">&larr; Controls</a>
+        <button onclick="loadHistory()" class="btn btn-secondary">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let chartInstance = null;
+
+    const findStartIndex = (labels, startTime) => {
+      if (!startTime || labels.length === 0) return -1;
+      const exact = labels.indexOf(startTime);
+      if (exact !== -1) return exact;
+
+      const [sh, sm] = startTime.split(':').map(Number);
+      const targetMins = sh * 60 + sm;
+      let bestIdx = -1;
+      let bestDiff = 9999;
+
+      labels.forEach((lbl, idx) => {
+        const [lh, lm] = lbl.split(':').map(Number);
+        const diff = Math.abs((lh * 60 + lm) - targetMins);
+        if (diff <= 15 && diff < bestDiff) {
+          bestDiff = diff;
+          bestIdx = idx;
+        }
+      });
+      return bestIdx;
+    };
+
+    const renderFallbackTable = (payload) => {
+      const container = document.getElementById('chartContainer');
+      container.style.height = 'auto';
+      container.style.padding = '10px';
+
+      const pts = (payload.points || []).slice().reverse();
+      if (pts.length === 0) {
+        container.innerHTML = '<div class="empty-msg">No 15-minute intervals logged yet.<br>Readings record at :00, :15, :30, and :45.</div>';
+        return;
+      }
+
+      let rows = pts.map(p => `<tr><td>${p.t}</td><td><strong>${p.v.toFixed(1)}°C</strong></td></tr>`).join('');
+      container.innerHTML = `
+        <div class="offline-banner">Offline mode — showing recorded log table</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Temperature</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    };
+
+    const renderInteractiveChart = (payload) => {
+      document.getElementById('stat-curr').textContent = payload.current.toFixed(1) + '°C';
+      document.getElementById('leg-target').textContent = payload.target + '°C';
+
+      const startWrap = document.getElementById('leg-start-wrap');
+      if (payload.systemRun) {
+        startWrap.style.display = 'flex';
+        document.getElementById('leg-start').textContent = payload.startTime;
+      } else {
+        startWrap.style.display = 'none';
+      }
+
+      const pts = payload.points || [];
+      if (pts.length === 0) {
+        document.getElementById('stat-min').textContent = '--';
+        document.getElementById('stat-max').textContent = '--';
+        document.getElementById('chartContainer').innerHTML =
+          '<div class="empty-msg">No 15-minute intervals logged yet.<br>Readings record at :00, :15, :30, and :45.</div>';
+        return;
+      }
+
+      const temps = pts.map(p => p.v);
+      document.getElementById('stat-min').textContent = Math.min(...temps).toFixed(1) + '°C';
+      document.getElementById('stat-max').textContent = Math.max(...temps).toFixed(1) + '°C';
+
+      if (typeof Chart === 'undefined') {
+        renderFallbackTable(payload);
+        return;
+      }
+
+      const container = document.getElementById('chartContainer');
+      if (!document.getElementById('tempChart')) {
+        container.innerHTML = '<canvas id="tempChart"></canvas>';
+      }
+
+      const labels = pts.map(p => p.t);
+      const targetSeries = pts.map(() => payload.target);
+      const startIdx = payload.systemRun ? findStartIndex(labels, payload.startTime) : -1;
+
+      const startLinePlugin = {
+        id: 'startLine',
+        afterDatasetsDraw(chart) {
+          if (startIdx < 0) return;
+          const { ctx, chartArea: { top, bottom }, scales: { x } } = chart;
+          const xPos = x.getPixelForValue(startIdx);
+          if (xPos === undefined) return;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.setLineDash([5, 4]);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#16A34A';
+          ctx.moveTo(xPos, top);
+          ctx.lineTo(xPos, bottom);
+          ctx.stroke();
+
+          ctx.fillStyle = '#16A34A';
+          ctx.font = '700 10px -apple-system, sans-serif';
+          ctx.textAlign = xPos > chart.width - 65 ? 'right' : 'left';
+          ctx.fillText('Start ' + payload.startTime, xPos + (xPos > chart.width - 65 ? -5 : 5), top + 12);
+          ctx.restore();
+        }
+      };
+
+      if (chartInstance) {
+        chartInstance.destroy();
+      }
+
+      const ctx = document.getElementById('tempChart').getContext('2d');
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Office Temp',
+              data: temps,
+              borderColor: '#0284C7',
+              backgroundColor: 'rgba(2, 132, 199, 0.14)',
+              borderWidth: 2.5,
+              tension: 0.3,
+              fill: true,
+              pointRadius: pts.length > 48 ? 2 : 3.5,
+              pointHoverRadius: 6,
+              pointBackgroundColor: '#0284C7'
+            },
+            {
+              label: 'Target Setpoint',
+              data: targetSeries,
+              borderColor: '#EA580C',
+              borderWidth: 1.8,
+              borderDash: [6, 4],
+              pointRadius: 0,
+              pointHoverRadius: 0,
+              fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1E293B',
+              padding: 10,
+              cornerRadius: 10,
+              callbacks: {
+                label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}°C`
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: {
+                color: '#64748B',
+                font: { size: 10, weight: '600' },
+                maxTicksLimit: 6,
+                maxRotation: 0
+              }
+            },
+            y: {
+              grid: { color: '#E2E8F0' },
+              ticks: {
+                color: '#64748B',
+                font: { size: 10, weight: '600' },
+                callback: (val) => val.toFixed(1) + '°'
+              }
+            }
+          }
+        },
+        plugins: [startLinePlugin]
+      });
+    };
+
+    const loadHistory = () => {
+      fetch('/history-data')
+        .then(r => r.json())
+        .then(data => renderInteractiveChart(data))
+        .catch(() => {
+          document.getElementById('chartContainer').innerHTML =
+            '<div class="empty-msg">Failed to connect to ESP32.</div>';
+        });
+    };
+
+    loadHistory();
+  </script>
+</body>
+</html>
+)rawliteral";
+
+
+
 const char success_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
   <title>Settings Updated</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta charset="UTF-8">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
+    body { font-family: -apple-system, sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
     .card { display: inline-block; background: #ffffff; padding: 30px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     h2 { color: #16A34A; margin-bottom: 10px; }
     .btn { background-color: #1E293B; color: white; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
@@ -312,9 +706,8 @@ const char sequence_initiated[] PROGMEM = R"rawliteral(
   <title>Sequence Initiated</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta charset="UTF-8">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
+    body { font-family: -apple-system, sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
     .card { display: inline-block; background: #ffffff; padding: 30px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     h2 { color: #16A34A; margin-bottom: 10px; }
     .btn { background-color: #1E293B; color: white; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
@@ -332,9 +725,8 @@ const char power_off_cmd_sent[] PROGMEM = R"rawliteral(
   <title>Power Off Sent</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta charset="UTF-8">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
+    body { font-family: -apple-system, sans-serif; background: #F4F6F9; text-align: center; margin-top: 50px; }
     .card { display: inline-block; background: #ffffff; padding: 30px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     h2 { color: #EF4444; margin-bottom: 10px; }
     .btn { background-color: #1E293B; color: white; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 20px; }
@@ -351,30 +743,84 @@ void notFound(AsyncWebServerRequest* request) {
   request->send(404, "text/plain", "Not found");
 }
 
+#ifdef USE_DUMMY_HISTORY
+void populateDummyHistory() {
+  for (int i = 0; i < HISTORY_SIZE; i++) {
+    int totalMinutes = i * 15;
+    int h = totalMinutes / 60;
+    int m = totalMinutes % 60;
+    snprintf(tempHistory[i].timeStr, sizeof(tempHistory[i].timeStr), "%02d:%02d", h, m);
+
+    // Smooth curve: 10.0°C at 00:00 -> 22.0°C at 12:00 (index 48) -> 10.0°C at 23:45
+    float progress = (i <= 48) ? (i / 48.0f) : ((96 - i) / 48.0f);
+    tempHistory[i].temp = 10.0f + (12.0f * progress);
+  }
+  historyHead = 0;
+  historyCount = HISTORY_SIZE;
+  Serial.println("Dummy 24h temperature history loaded.");
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
 
   sprintf(myParameter1, "%02d", AC_Turn_On_Time_Hour);
   sprintf(myParameter2, "%02d", AC_Turn_On_Time_Minute);
 
-  // 1. REGISTER THE EVENT HANDLER
-  WiFi.onEvent(WiFiEvent);  // This tells the ESP32 to run WiFiEvent() on network changes
+  WiFi.onEvent(WiFiEvent);  
 
-  // 2. INITIAL CONNECTION
   WiFi.mode(WIFI_STA);
   Serial.print("Connecting to ");
   Serial.println(ssid);
   WiFi.setTxPower(WIFI_POWER_8_5dBm);  
   WiFi.begin(ssid, password);
 
+  // Main Dashboard Route
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send_P(200, "text/html", index_html, processor);
   });
 
+  // New History Graph Page Route
+  server.on("/history", HTTP_GET, [](AsyncWebServerRequest* request) {
+    request->send_P(200, "text/html", history_html);
+  });
+
+  // JSON Endpoint serving the 96-point circular buffer + Target & Schedule metadata
+  server.on("/history-data", HTTP_GET, [](AsyncWebServerRequest* request) {
+    char startStr[6];
+    snprintf(startStr, sizeof(startStr), "%02d:%02d", AC_Turn_On_Time_Hour, AC_Turn_On_Time_Minute);
+
+    String json;
+    json.reserve(2600);
+    json += "{\"current\":";
+    json += String(currentTemp, 1);
+    json += ",\"target\":";
+    json += String(TargetTemperature);
+    json += ",\"startTime\":\"";
+    json += String(startStr);
+    json += "\",\"systemRun\":";
+    json += (runSystem ? "true" : "false");
+    json += ",\"points\":[";
+
+    int startIdx = (historyCount == HISTORY_SIZE) ? historyHead : 0;
+    for (int i = 0; i < historyCount; i++) {
+      int idx = (startIdx + i) % HISTORY_SIZE;
+      if (i > 0) json += ",";
+      json += "{\"t\":\"";
+      json += tempHistory[idx].timeStr;
+      json += "\",\"v\":";
+      json += String(tempHistory[idx].temp, 1);
+      json += "}";
+    }
+
+    json += "]}";
+    request->send(200, "application/json", json);
+  });
+
   server.on("/trigger", HTTP_GET, [](AsyncWebServerRequest* request) {
-    if (IRCommandStep == 0) {  // Only start if not already sending
+    if (IRCommandStep == 0) {  
       IRCommandStep = 1;
-      previousIRMillis = millis();  // Initialize the non-blocking timer
+      previousIRMillis = millis();  
       Serial.println("Manual IR Triggered via Web");
       request->send(200, "text/html", sequence_initiated);
     } else {
@@ -382,14 +828,12 @@ void setup() {
     }
   });
 
-  // Button for sending off command
   server.on("/off", HTTP_GET, [](AsyncWebServerRequest* request) {
     MyLG_Aircondition.sendCommandAndParameter(LG_COMMAND_OFF, 0); 
     Serial.println("Manual IR OFF Triggered via Web");
     request->send_P(200, "text/html", power_off_cmd_sent); 
   });
 
-  // Handle incoming settings form submit
   server.on("/get", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (request->hasParam("input1") && request->getParam("input1")->value().length() > 0) {
       strncpy(myParameter1, request->getParam("input1")->value().c_str(), sizeof(myParameter1) - 1);
@@ -412,12 +856,10 @@ void setup() {
       myParameter5[sizeof(myParameter5) - 1] = '\0';
     }
     
-    // Reset days
     for(int i = 0; i < 7; i++) {
       activeDays[i] = false;
     }
     
-    // Read days
     if (request->hasParam("d0")) activeDays[0] = true;
     if (request->hasParam("d1")) activeDays[1] = true;
     if (request->hasParam("d2")) activeDays[2] = true;
@@ -430,8 +872,13 @@ void setup() {
     request->send_P(200, "text/html", success_html);
   });
 
+  #ifdef USE_DUMMY_HISTORY
+  populateDummyHistory();
+  #endif
+
   server.onNotFound(notFound);
   server.begin();
+
 
 #if defined(__AVR_ATmega32U4__) || defined(SERIAL_PORT_USBVIRTUAL) || defined(SERIAL_USB) || defined(USBCON) \
   || defined(SERIALUSB_PID) || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_attiny3217)
@@ -509,6 +956,9 @@ void loop() {
     updateSensorReadings();
     AM2320UpdateIntervalPrevious = millis(); 
   }
+
+  // Log temperature history at :00, :15, :30, and :45 past the hour
+  logTemperatureHistory();
 
   if (millis() - OLEDUpdateIntervalPrevious >= OLEDUpdateInterval) {
     getLocalTime(&timenow, 0);
@@ -611,6 +1061,31 @@ void loop() {
 
     previousIRMillis = millis();  
   }
+}
+
+void logTemperatureHistory() {
+#ifndef USE_DUMMY_HISTORY
+  // Wait until NTP time is synced and a valid temperature reading exists
+  if (!TimeSyncSuccessBool || currentTemp == 0 || currentTemp == 99) return;
+
+  struct tm now;
+  if (!getLocalTime(&now, 0)) return;
+
+  // Check if current minute is 0, 15, 30, or 45 and hasn't been logged yet this minute
+  if ((now.tm_min % 15 == 0) && (now.tm_min != lastLoggedMinute)) {
+    lastLoggedMinute = now.tm_min;
+
+    snprintf(tempHistory[historyHead].timeStr, sizeof(tempHistory[historyHead].timeStr), "%02d:%02d", now.tm_hour, now.tm_min);
+    tempHistory[historyHead].temp = currentTemp;
+
+    historyHead = (historyHead + 1) % HISTORY_SIZE;
+    if (historyCount < HISTORY_SIZE) {
+      historyCount++;
+    }
+
+    Serial.printf("Logged History [%s]: %.1f C (Total points: %d)\n", tempHistory[(historyHead + HISTORY_SIZE - 1) % HISTORY_SIZE].timeStr, currentTemp, historyCount);
+  }
+#endif
 }
 
 void printLocalTime() {
